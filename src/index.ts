@@ -13,7 +13,7 @@ type TgUpdate = any;
 const app = new Hono<{ Bindings: Env }>();
 
 const TME_BASE = "https://t.me/s/";
-const FIRST_SYNC_LIMIT = 5; // only send last 5 posts on first follow
+const FIRST_SYNC_LIMIT = 5; // send last 5 posts when last_post_id==0
 
 function nowSec() {
   return Math.floor(Date.now() / 1000);
@@ -23,7 +23,6 @@ function normalizeUsername(input: string) {
   let s = (input || "").trim();
   if (!s) return null;
 
-  // Accept @name, t.me/name, https://t.me/name, https://t.me/s/name
   s = s.replace(/^https?:\/\/t\.me\/s\//i, "");
   s = s.replace(/^https?:\/\/t\.me\//i, "");
   s = s.replace(/^t\.me\/s\//i, "");
@@ -109,7 +108,7 @@ function stripHtml(html: string) {
 
 type ScrapedPost = {
   postId: number;
-  text: string; // might be empty if no text or fallback-only
+  text: string;
   link: string;
 };
 
@@ -130,9 +129,9 @@ async function fetchTme(username: string): Promise<string> {
 
 /**
  * Robust scraper:
- * - Primary: scan all data-post="SomeCase/123", match username case-insensitively.
- * - Extract text from tgme_widget_message_text near each post container.
- * - Fallback: scan href="https://t.me/<chan>/<id>" links if data-post parsing yields 0.
+ * - Primary: data-post="SomeCase/123" (username matched case-insensitively)
+ * - Extract text from tgme_widget_message_text near each post
+ * - Fallback: href="https://t.me/<chan>/<id>"
  */
 function scrapeTmePreview(username: string, html: string): ScrapedPost[] {
   const wanted = username.toLowerCase();
@@ -150,11 +149,8 @@ function scrapeTmePreview(username: string, html: string): ScrapedPost[] {
     if (!Number.isFinite(postId)) continue;
 
     const start = m.index;
-
-    // Find the message container start to constrain to one post:
     const slice = html.slice(start, start + 50000);
 
-    // Text block usually present; if absent, we’ll keep it empty and rely on link.
     const textMatch =
       /<div class="tgme_widget_message_text[^"]*">([\s\S]*?)<\/div>/.exec(slice) ||
       /<div class="tgme_widget_message_text[^>]*>([\s\S]*?)<\/div>/.exec(slice);
@@ -169,7 +165,7 @@ function scrapeTmePreview(username: string, html: string): ScrapedPost[] {
     });
   }
 
-  // Fallback if Telegram changes data-post format
+  // Fallback: link-based
   if (!posts.length) {
     const re2 = /href="https:\/\/t\.me\/([^"\/]+)\/(\d+)"/g;
     while ((m = re2.exec(html)) !== null) {
@@ -184,7 +180,6 @@ function scrapeTmePreview(username: string, html: string): ScrapedPost[] {
     }
   }
 
-  // De-dupe + sort
   const uniq = new Map<number, ScrapedPost>();
   for (const p of posts) uniq.set(p.postId, p);
   return [...uniq.values()].sort((a, b) => a.postId - b.postId);
@@ -193,10 +188,9 @@ function scrapeTmePreview(username: string, html: string): ScrapedPost[] {
 /** ---------- Delivery ---------- **/
 
 async function sendPostToDestination(env: Env, destChatId: number, username: string, post: ScrapedPost) {
-  // Keep it plain text (no parse_mode)
   const header = `@${username}`;
   const body = post.text ? post.text : "(no text)";
-  const msg = `${header}\n${post.link}\n\n${body}`.slice(0, 3900); // keep < 4096
+  const msg = `${header}\n${post.link}\n\n${body}`.slice(0, 3900);
   await tg(env, "sendMessage", { chat_id: destChatId, text: msg });
 }
 
@@ -217,12 +211,12 @@ async function handlePrivateMessage(env: Env, msg: any) {
     return send(
       [
         "Commands:",
-        "/newdest → verify your destination channel (I must be admin there).",
-        "/follow @username → follow a public channel by username (scrapes t.me/s).",
+        "/newdest → verify your destination channel (bot must be ADMIN there).",
+        "/follow @username → follow public channel (scrapes t.me/s).",
         "/unfollow @username",
         "/list",
         "",
-        "Local cron test: run wrangler with --test-scheduled then call /__scheduled",
+        "Local cron test: run `wrangler dev --test-scheduled` then call /__scheduled",
       ].join("\n")
     );
   }
@@ -249,21 +243,17 @@ async function handlePrivateMessage(env: Env, msg: any) {
 
   if (parsed.cmd === "/follow") {
     const u = normalizeUsername(parsed.args[0] || "");
-    if (!u) return send("Usage: /follow @channelusername");
+    if (!u) return send("Usage: /follow @channelusername (or https://t.me/<username>)");
 
-    await env.DB.prepare(
-      "INSERT OR IGNORE INTO sources(username, last_post_id, updated_at) VALUES(?, 0, ?)"
-    )
+    await env.DB.prepare("INSERT OR IGNORE INTO sources(username, last_post_id, updated_at) VALUES(?, 0, ?)")
       .bind(u, nowSec())
       .run();
 
-    await env.DB.prepare(
-      "INSERT OR IGNORE INTO user_sources(user_id, username, created_at) VALUES(?, ?, ?)"
-    )
+    await env.DB.prepare("INSERT OR IGNORE INTO user_sources(user_id, username, created_at) VALUES(?, ?, ?)")
       .bind(userId, u, nowSec())
       .run();
 
-    return send(`✅ Following @${u}. I’ll check it on the schedule.`);
+    return send(`✅ Following @${u}. Trigger cron locally via /__scheduled to test.`);
   }
 
   if (parsed.cmd === "/unfollow") {
@@ -282,18 +272,14 @@ async function handlePrivateMessage(env: Env, msg: any) {
       .bind(userId)
       .first<any>();
 
-    const follows = await env.DB.prepare(
-      "SELECT username FROM user_sources WHERE user_id=? ORDER BY username ASC"
-    )
+    const follows = await env.DB.prepare("SELECT username FROM user_sources WHERE user_id=? ORDER BY username ASC")
       .bind(userId)
       .all<any>();
 
     return send(
       [
         `Destination: ${dest ? `${dest.chat_id} (verified=${dest.verified})` : "not set"}`,
-        `Following: ${
-          follows.results.length ? follows.results.map((r: any) => `@${r.username}`).join(", ") : "none"
-        }`,
+        `Following: ${follows.results.length ? follows.results.map((r: any) => `@${r.username}`).join(", ") : "none"}`,
       ].join("\n")
     );
   }
@@ -316,9 +302,7 @@ async function handleChannelPost(env: Env, msg: any) {
   const token = parseDestClaim(text);
   if (!token) return;
 
-  const row = await env.DB.prepare(
-    "SELECT token, user_id FROM pending_claims WHERE token=? AND kind='dest'"
-  )
+  const row = await env.DB.prepare("SELECT token, user_id FROM pending_claims WHERE token=? AND kind='dest'")
     .bind(token)
     .first<any>();
 
@@ -332,9 +316,7 @@ async function handleChannelPost(env: Env, msg: any) {
     .bind(userId, chatId, nowSec())
     .run();
 
-  await env.DB.prepare("DELETE FROM pending_claims WHERE token=?")
-    .bind(token)
-    .run();
+  await env.DB.prepare("DELETE FROM pending_claims WHERE token=?").bind(token).run();
 
   await tg(env, "sendMessage", { chat_id: userId, text: `✅ Destination verified: ${chatId}` });
 }
@@ -355,6 +337,9 @@ async function processUpdate(env: Env, update: TgUpdate) {
 async function runScrapeTick(env: Env) {
   const followed = await env.DB.prepare("SELECT DISTINCT username FROM user_sources").all<any>();
 
+  // DEBUG LOG 1
+  console.log("tick: followed =", followed.results.map((r: any) => r.username));
+
   for (const row of followed.results) {
     const username = String(row.username);
 
@@ -366,10 +351,16 @@ async function runScrapeTick(env: Env) {
       const lastSeen = Number(source?.last_post_id ?? 0);
 
       const html = await fetchTme(username);
+
+      // DEBUG LOG 2
+      console.log("fetched", username, "html_len=", html.length, "lastSeen=", lastSeen);
+
       const posts = scrapeTmePreview(username, html);
 
+      // DEBUG LOG 3
+      console.log("parsed", username, "posts=", posts.length);
+
       if (!posts.length) {
-        // If t.me served something unexpected (block, empty, etc.)
         await env.DB.prepare("UPDATE sources SET updated_at=? WHERE username=?")
           .bind(nowSec(), username)
           .run();
@@ -378,10 +369,11 @@ async function runScrapeTick(env: Env) {
 
       let newPosts = posts.filter((p) => p.postId > lastSeen);
 
-      // First sync: avoid flooding + 429s
       if (lastSeen === 0 && newPosts.length > FIRST_SYNC_LIMIT) {
         newPosts = newPosts.slice(-FIRST_SYNC_LIMIT);
       }
+
+      console.log("newPosts", username, "count=", newPosts.length, newPosts.length ? `range=${newPosts[0].postId}-${newPosts[newPosts.length - 1].postId}` : "");
 
       if (!newPosts.length) {
         await env.DB.prepare("UPDATE sources SET updated_at=? WHERE username=?")
@@ -399,13 +391,13 @@ async function runScrapeTick(env: Env) {
         .bind(username)
         .all<any>();
 
-      // Deliver in order
+      console.log("subs", username, "count=", subs.results.length);
+
       for (const post of newPosts) {
         for (const sub of subs.results) {
           const userId = Number(sub.user_id);
           const destChatId = Number(sub.dest_chat_id);
 
-          // per-user dedupe
           const exists = await env.DB.prepare(
             "SELECT 1 FROM deliveries WHERE user_id=? AND username=? AND post_id=?"
           )
@@ -415,29 +407,30 @@ async function runScrapeTick(env: Env) {
           if (exists) continue;
 
           try {
+            console.log("send", username, "post", post.postId, "to", destChatId);
             await sendPostToDestination(env, destChatId, username, post);
 
-            // Only mark delivered AFTER successful send
             await env.DB.prepare(
               "INSERT INTO deliveries(user_id, username, post_id, created_at) VALUES(?, ?, ?, ?)"
             )
               .bind(userId, username, post.postId, nowSec())
               .run();
+
+            console.log("sent", username, "post", post.postId, "to", destChatId);
           } catch (e) {
             console.log("send failed", username, post.postId, String(e));
-            // Don't insert deliveries row -> it will retry next tick
           }
         }
       }
 
-      // Advance source cursor so we don’t reprocess forever
       const maxId = newPosts[newPosts.length - 1].postId;
       await env.DB.prepare("UPDATE sources SET last_post_id=?, updated_at=? WHERE username=?")
         .bind(maxId, nowSec(), username)
         .run();
+
+      console.log("cursor advanced", username, "last_post_id=", maxId);
     } catch (e) {
       console.log("scrape tick error", username, String(e));
-      // move on to next username
       continue;
     }
   }
