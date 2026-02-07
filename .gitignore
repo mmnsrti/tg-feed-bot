@@ -1,2 +1,4 @@
 node_modules
 .wrangler
+.wrangler/state/v3/d1/miniflare-D1DatabaseObject/59ee2d0febb619c5920a509f57e425f820ebb37106fe440cf33cef950d48fe81.sqlite
+.wrangler
