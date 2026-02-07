@@ -4,8 +4,9 @@
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "dev": "wrangler dev",
-    "poll": "cross-env DOTENV_CONFIG_PATH=.dev.vars tsx -r dotenv/config scripts/poll.ts"
+    "dev": "wrangler dev --test-scheduled",
+    "poll": "cross-env DOTENV_CONFIG_PATH=.dev.vars tsx -r dotenv/config scripts/poll.ts",
+    "schedule": "tsx scripts/schedule.ts"
   },
   "keywords": [],
   "author": "",
