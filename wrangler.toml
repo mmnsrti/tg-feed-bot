@@ -2,11 +2,21 @@ name = "tg-feed-bot"
 main = "src/index.ts"
 compatibility_date = "2026-02-07"
 compatibility_flags = ["nodejs_compat"]
+workers_dev = true
 
 [triggers]
-crons = ["*/2 * * * *"] # every 2 minutes
+crons = ["*/1 * * * *"] # only to make sure ticker is started (cron can't do 5s)
 
 [[d1_databases]]
 binding = "DB"
 database_name = "tg_feed_bot"
-database_id = "REPLACE_ME"
+database_id = "ac8e67e1-13df-4ee6-8dbc-5fa5cbcfb7ea"
+
+[[durable_objects.bindings]]
+name = "TICKER"
+class_name = "Ticker"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Ticker"]
+
