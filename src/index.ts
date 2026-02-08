@@ -6,27 +6,175 @@ type Env = {
   DB: D1Database;
   BOT_TOKEN: string;
   WEBHOOK_SECRET: string;
+  ADMIN_KEY?: string;
   TICKER: DurableObjectNamespace;
 };
 
 type TgUpdate = any;
+type Lang = "fa" | "en";
+
+type ScrapedPost = {
+  postId: number;
+  text: string;
+  link: string;
+  photos: string[];
+};
 
 const app = new Hono<{ Bindings: Env }>();
 
+/** ------------------- constants ------------------- */
 const TME_BASE = "https://t.me/s/";
-const FOLLOW_BACKFILL_N = 3;
 const FIRST_SYNC_LIMIT = 5;
 
-/** ---- 5s scheduler settings ---- */
-const TICK_MS = 5000; // ~5 seconds
+const TICK_MS = 5000;
 const LOCK_NAME = "scrape_tick";
-const LOCK_TTL_SEC = 20;
+const LOCK_TTL_SEC = 25;
+
+const MAX_FETCH_CONCURRENCY = 6;
+const MAX_SOURCES_PER_TICK = 30;
+
+const MIN_POLL_SEC = 5;
+const MAX_POLL_SEC = 240;
+
+const LIST_PAGE_SIZE = 8;
 
 function nowSec() {
   return Math.floor(Date.now() / 1000);
 }
 
-/* ------------------------- Telegram helpers ------------------------- */
+function clamp(n: number, a: number, b: number) {
+  return Math.max(a, Math.min(b, n));
+}
+
+function utcHourNow(): number {
+  return new Date().getUTCHours();
+}
+
+/** ------------------- i18n (single-language) ------------------- */
+function t(lang: Lang, fa: string, en: string) {
+  return lang === "fa" ? fa : en;
+}
+
+function S(lang: Lang) {
+  return {
+    title: t(lang, "📡 فید کانال‌ها", "📡 Channel Feeds"),
+    homeHint: t(lang, "از دکمه‌ها استفاده کن 👇", "Use the buttons below 👇"),
+
+    setDest: t(lang, "🎯 تنظیم کانال مقصد", "🎯 Set Destination"),
+    addChannel: t(lang, "➕ افزودن کانال", "➕ Add Channel"),
+    myChannels: t(lang, "📋 کانال‌های من", "📋 My Channels"),
+    settings: t(lang, "⚙️ تنظیمات", "⚙️ Settings"),
+    help: t(lang, "❓ راهنما", "❓ Help"),
+
+    back: t(lang, "⬅️ برگشت", "⬅️ Back"),
+    cancel: t(lang, "✖️ لغو", "✖️ Cancel"),
+
+    language: t(lang, "🌐 زبان", "🌐 Language"),
+    realtime: t(lang, "⚡ ریل‌تایم", "⚡ Realtime"),
+    digest: t(lang, "🧾 خلاصه", "🧾 Digest"),
+    quiet: t(lang, "🌙 ساعت سکوت", "🌙 Quiet Hours"),
+    defaultBackfill: t(lang, "📌 بک‌فیل پیش‌فرض", "📌 Default Backfill"),
+    testDelivery: t(lang, "✅ تست ارسال", "✅ Test Delivery"),
+
+    realtimeOn: t(lang, "روشن ✅", "ON ✅"),
+    realtimeOff: t(lang, "خاموش ❌", "OFF ❌"),
+
+    openOriginal: t(lang, "🔗 پست اصلی", "🔗 Original post"),
+    noText: t(lang, "(بدون متن)", "(no text)"),
+
+    needDestFirst: t(lang, "⚠️ اول کانال مقصد را تنظیم کن.", "⚠️ Set destination first."),
+    sendUsername: t(lang, "نام کاربری یا لینک کانال عمومی را بفرست:\nمثلاً @khabarfuri", "Send a public channel username/link:\nExample: @khabarfuri"),
+    invalidFormat: t(lang, "فرمت اشتباه است. مثل @name بفرست.", "Invalid format. Send @name."),
+    fetchFailed: t(lang, "الان نتونستم دریافت کنم. چند دقیقه دیگه امتحان کن.", "Fetch failed. Try again in a minute."),
+    couldntRead: (u: string) => t(lang, `از @${u} چیزی نتونستم بخونم. عمومی هست؟`, `Couldn’t read @${u}. Is it public?`),
+
+    followed: (u: string, n: number) => t(lang, `✅ @${u} اضافه شد. (${n} پست آخر ارسال شد)`, `✅ Followed @${u}. (Sent last ${n} posts)`),
+    followedNoRealtime: (u: string) => t(lang, `✅ @${u} اضافه شد. (ریل‌تایم خاموش است؛ فقط خلاصه)`, `✅ Followed @${u}. (Realtime is OFF; digest only)`),
+
+    helpText: t(
+      lang,
+      [
+        "❓ راهنما",
+        "",
+        "✅ این ربات پست‌های کانال‌های عمومی را خوانده و داخل کانال مقصد شما ارسال می‌کند.",
+        "",
+        "⚡ ریل‌تایم: هر پست جدید سریع ارسال می‌شود.",
+        "🧾 خلاصه: هر X ساعت یک پیام خلاصه ارسال می‌شود.",
+        "",
+        "📌 پست‌ها طوری ارسال می‌شوند که داخل تلگرام متن کامل را ببینی (بدون نیاز به رفتن به لینک).",
+      ].join("\n"),
+      [
+        "❓ Help",
+        "",
+        "✅ This bot reads public channels and posts them into your destination channel.",
+        "",
+        "⚡ Realtime: new posts are sent quickly.",
+        "🧾 Digest: a summary is sent every X hours.",
+        "",
+        "📌 Posts are formatted so you can read them inside Telegram (no need to open the original link).",
+      ].join("\n")
+    ),
+
+    settingsText: (rt: number, dh: number, qs: number, qe: number, dbf: number) => {
+      const quiet = qs < 0 || qe < 0 ? t(lang, "خاموش", "OFF") : `${qs}:00 → ${qe}:00 (UTC)`;
+      return [
+        t(lang, "⚙️ تنظیمات", "⚙️ Settings"),
+        "",
+        `${t(lang, "⚡ ریل‌تایم:", "⚡ Realtime:")} ${rt ? t(lang, "روشن", "ON") : t(lang, "خاموش", "OFF")}`,
+        `${t(lang, "🧾 بازه خلاصه:", "🧾 Digest interval:")} ${dh} ${t(lang, "ساعت", "hours")}`,
+        `${t(lang, "🌙 ساعت سکوت:", "🌙 Quiet hours:")} ${quiet}`,
+        `${t(lang, "📌 بک‌فیل پیش‌فرض:", "📌 Default backfill:")} ${dbf}`,
+      ].join("\n");
+    },
+
+    destTitle: t(lang, "🎯 تنظیم کانال مقصد", "🎯 Set Destination"),
+    destSteps: t(
+      lang,
+      "1) یک کانال مقصد بساز\n2) ربات را ادمین کن\n3) همین خط را داخل کانال ارسال کن:",
+      "1) Create a destination channel\n2) Add the bot as admin\n3) Post this line in the channel:"
+    ),
+    copyHint: t(lang, "روی متن کادر لمس طولانی کن تا کپی شود.", "Long-press the code block to copy."),
+
+    digestAskHours: t(lang, "عدد بازه خلاصه را بفرست (۱ تا ۲۴).", "Send digest interval in hours (1..24)."),
+    invalidNumber: t(lang, "عدد معتبر نیست.", "Invalid number."),
+    quietAsk: t(
+      lang,
+      "برای تنظیم ساعت سکوت (UTC):\nمثال: 1 8\nبرای خاموش کردن: off",
+      "Set quiet hours (UTC):\nExample: 1 8\nDisable: off"
+    ),
+    backfillAsk: t(lang, "عدد بک‌فیل پیش‌فرض را بفرست (۰ تا ۱۰).", "Send default backfill (0..10)."),
+
+    chSettingsTitle: (u: string) => t(lang, `⚙️ تنظیمات @${u}`, `⚙️ Settings @${u}`),
+    pause: t(lang, "⏸ توقف", "⏸ Pause"),
+    resume: t(lang, "▶️ ادامه", "▶️ Resume"),
+    modeRealtime: t(lang, "⚡ ریل‌تایم", "⚡ Realtime"),
+    modeDigest: t(lang, "🧾 خلاصه", "🧾 Digest"),
+    filters: t(lang, "🔎 فیلترها", "🔎 Filters"),
+    backfill: t(lang, "📌 بک‌فیل", "📌 Backfill"),
+    unfollow: t(lang, "🗑 حذف", "🗑 Unfollow"),
+
+    setInclude: t(lang, "➕ شامل", "➕ Include"),
+    setExclude: t(lang, "➖ حذف", "➖ Exclude"),
+    clearFilters: t(lang, "🧹 پاک کردن فیلترها", "🧹 Clear filters"),
+    incPrompt: (u: string) => t(lang, `کلمات شامل برای @${u} را بفرست (با کاما جدا کن).`, `Send include keywords for @${u} (comma-separated).`),
+    excPrompt: (u: string) => t(lang, `کلمات حذف برای @${u} را بفرست (با کاما جدا کن).`, `Send exclude keywords for @${u} (comma-separated).`),
+
+    testOk: t(lang, "✅ تست ارسال انجام شد.", "✅ Delivery test succeeded."),
+  };
+}
+
+/** ------------------- Telegram helpers ------------------- */
+class TelegramError extends Error {
+  code: number;
+  description: string;
+  parameters?: any;
+  constructor(code: number, description: string, parameters?: any) {
+    super(`TelegramError ${code}: ${description}`);
+    this.code = code;
+    this.description = description;
+    this.parameters = parameters;
+  }
+}
 
 async function tg(env: Env, method: string, params: Record<string, any>, tries = 3): Promise<any> {
   const url = `https://api.telegram.org/bot${env.BOT_TOKEN}/${method}`;
@@ -46,7 +194,7 @@ async function tg(env: Env, method: string, params: Record<string, any>, tries =
     return tg(env, method, params, tries - 1);
   }
 
-  throw new Error(`${method} failed: ${JSON.stringify(data)}`);
+  throw new TelegramError(Number(data.error_code || 0), String(data.description || "Unknown error"), data.parameters);
 }
 
 function parseCmd(text: string) {
@@ -71,12 +219,65 @@ function normalizeUsername(input: string) {
   s = s.replace(/^t\.me\//i, "");
   if (s.startsWith("@")) s = s.slice(1);
 
-  if (!/^[A-Za-z0-9_]{5,64}$/.test(s)) return null;
+  if (!/^[A-Za-z0-9_]{5,32}$/.test(s)) return null;
   return s;
 }
 
-/* ------------------------- DB helpers ------------------------- */
+function escapeHtml(s: string) {
+  return (s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
 
+/** ------------------- DB auto-upgrade (safe) ------------------- */
+async function ensureDbUpgrades(db: D1Database) {
+  // meta_kv stores schema version
+  await db.prepare("CREATE TABLE IF NOT EXISTS meta_kv (key TEXT PRIMARY KEY, value TEXT NOT NULL)").run();
+
+  const row = await db.prepare("SELECT value FROM meta_kv WHERE key='schema_v'").first<any>();
+  const v = Number(row?.value ?? 0);
+  if (v >= 1) return;
+
+  // Create extra tables (if missing)
+  await db
+    .prepare(
+      `CREATE TABLE IF NOT EXISTS queued_realtime(
+        user_id INTEGER NOT NULL,
+        username TEXT NOT NULL,
+        post_id INTEGER NOT NULL,
+        queued_at INTEGER NOT NULL,
+        PRIMARY KEY (user_id, username, post_id)
+      )`
+    )
+    .run();
+  await db.prepare("CREATE INDEX IF NOT EXISTS idx_queued_realtime_user_time ON queued_realtime(user_id, queued_at)").run();
+
+  // Add columns (ignore failures if already exist)
+  const alters = [
+    "ALTER TABLE sources ADD COLUMN next_check_at INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE sources ADD COLUMN check_every_sec INTEGER NOT NULL DEFAULT 5",
+    "ALTER TABLE sources ADD COLUMN fail_count INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE sources ADD COLUMN last_error TEXT",
+    "ALTER TABLE sources ADD COLUMN last_error_at INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE sources ADD COLUMN last_success_at INTEGER NOT NULL DEFAULT 0",
+
+    "ALTER TABLE user_sources ADD COLUMN backfill_n INTEGER NOT NULL DEFAULT 3",
+
+    "ALTER TABLE user_prefs ADD COLUMN default_backfill_n INTEGER NOT NULL DEFAULT 3",
+    "ALTER TABLE user_prefs ADD COLUMN quiet_start INTEGER NOT NULL DEFAULT -1",
+    "ALTER TABLE user_prefs ADD COLUMN quiet_end INTEGER NOT NULL DEFAULT -1",
+  ];
+
+  for (const q of alters) {
+    try {
+      await db.prepare(q).run();
+    } catch {
+      // already exists
+    }
+  }
+
+  await db.prepare("INSERT OR REPLACE INTO meta_kv(key, value) VALUES('schema_v', '1')").run();
+}
+
+/** ------------------- DB helpers ------------------- */
 async function upsertUser(db: D1Database, userId: number) {
   await db.prepare("INSERT OR IGNORE INTO users(user_id, created_at) VALUES(?, ?)").bind(userId, nowSec()).run();
 }
@@ -85,48 +286,75 @@ async function getDestination(db: D1Database, userId: number) {
   return db.prepare("SELECT chat_id, verified FROM destinations WHERE user_id=?").bind(userId).first<any>();
 }
 
-type Lang = "fa" | "en";
-
 async function ensurePrefs(db: D1Database, userId: number) {
+  // minimal defaults
   await db
-    .prepare("INSERT OR IGNORE INTO user_prefs(user_id, lang, digest_hours, last_digest_at, updated_at) VALUES(?, 'fa', 6, 0, ?)")
+    .prepare(
+      `INSERT OR IGNORE INTO user_prefs(
+        user_id, lang, digest_hours, last_digest_at, realtime_enabled, updated_at,
+        default_backfill_n, quiet_start, quiet_end
+      ) VALUES(?, 'fa', 6, 0, 1, ?, 3, -1, -1)`
+    )
     .bind(userId, nowSec())
     .run();
 
   const row = await db
-    .prepare("SELECT lang, digest_hours, last_digest_at, realtime_enabled FROM user_prefs WHERE user_id=?")
+    .prepare(
+      `SELECT lang, digest_hours, last_digest_at, realtime_enabled,
+              default_backfill_n, quiet_start, quiet_end
+       FROM user_prefs WHERE user_id=?`
+    )
     .bind(userId)
     .first<any>();
 
-  if (!row) return { lang: "fa", digest_hours: 6, last_digest_at: 0, realtime_enabled: 1 };
   return {
-    lang: (row.lang as Lang) || "fa",
-    digest_hours: Number(row.digest_hours ?? 6),
-    last_digest_at: Number(row.last_digest_at ?? 0),
-    realtime_enabled: Number(row.realtime_enabled ?? 1),
+    lang: (row?.lang as Lang) || "fa",
+    digest_hours: Number(row?.digest_hours ?? 6),
+    last_digest_at: Number(row?.last_digest_at ?? 0),
+    realtime_enabled: Number(row?.realtime_enabled ?? 1),
+    default_backfill_n: Number(row?.default_backfill_n ?? 3),
+    quiet_start: Number(row?.quiet_start ?? -1),
+    quiet_end: Number(row?.quiet_end ?? -1),
   };
 }
 
 async function setPrefs(
   db: D1Database,
   userId: number,
-  patch: Partial<{ lang: Lang; digest_hours: number; last_digest_at: number; realtime_enabled: number }>
+  patch: Partial<{
+    lang: Lang;
+    digest_hours: number;
+    last_digest_at: number;
+    realtime_enabled: number;
+    default_backfill_n: number;
+    quiet_start: number;
+    quiet_end: number;
+  }>
 ) {
-  const current = await ensurePrefs(db, userId);
-
-  const lang = patch.lang ?? current.lang;
-  const digestHours = patch.digest_hours ?? current.digest_hours;
-  const lastDigestAt = patch.last_digest_at ?? current.last_digest_at;
-  const realtimeEnabled = patch.realtime_enabled ?? current.realtime_enabled;
-
+  const cur = await ensurePrefs(db, userId);
+  const next = { ...cur, ...patch };
   await db
-    .prepare("UPDATE user_prefs SET lang=?, digest_hours=?, last_digest_at=?, realtime_enabled=?, updated_at=? WHERE user_id=?")
-    .bind(lang, digestHours, lastDigestAt, realtimeEnabled, nowSec(), userId)
+    .prepare(
+      `UPDATE user_prefs SET
+        lang=?, digest_hours=?, last_digest_at=?, realtime_enabled=?, updated_at=?,
+        default_backfill_n=?, quiet_start=?, quiet_end=?
+       WHERE user_id=?`
+    )
+    .bind(
+      next.lang,
+      next.digest_hours,
+      next.last_digest_at,
+      next.realtime_enabled,
+      nowSec(),
+      clamp(Number(next.default_backfill_n ?? 3), 0, 10),
+      Number(next.quiet_start ?? -1),
+      Number(next.quiet_end ?? -1),
+      userId
+    )
     .run();
 }
 
-/* ------------------------- State (UX flows) ------------------------- */
-
+/** ------------------- state ------------------- */
 async function setState(db: D1Database, userId: number, state: string, data: any = null) {
   await db
     .prepare("INSERT OR REPLACE INTO user_state(user_id, state, data, updated_at) VALUES(?, ?, ?, ?)")
@@ -144,106 +372,121 @@ async function clearState(db: D1Database, userId: number) {
   await db.prepare("DELETE FROM user_state WHERE user_id=?").bind(userId).run();
 }
 
-/* ------------------------- i18n helpers ------------------------- */
-
-function t(lang: Lang, fa: string, en: string) {
-  return lang === "fa" ? `${fa}\n\n(${en})` : `${en}\n\n(${fa})`;
+/** ------------------- UI helpers ------------------- */
+async function sendOrEdit(env: Env, opts: { chat_id: number; text: string; reply_markup?: any; parse_mode?: "HTML"; disable_web_page_preview?: boolean; message_id?: number }) {
+  if (opts.message_id) {
+    try {
+      return await tg(env, "editMessageText", {
+        chat_id: opts.chat_id,
+        message_id: opts.message_id,
+        text: opts.text,
+        reply_markup: opts.reply_markup,
+        parse_mode: opts.parse_mode,
+        disable_web_page_preview: opts.disable_web_page_preview,
+      });
+    } catch {
+      // fall through
+    }
+  }
+  return tg(env, "sendMessage", {
+    chat_id: opts.chat_id,
+    text: opts.text,
+    reply_markup: opts.reply_markup,
+    parse_mode: opts.parse_mode,
+    disable_web_page_preview: opts.disable_web_page_preview,
+  });
 }
 
-function btn(lang: Lang, fa: string, en: string) {
-  return lang === "fa" ? fa : en;
+/** ------------------- keyboards ------------------- */
+function backKb(lang: Lang, data = "m:home") {
+  const s = S(lang);
+  return { inline_keyboard: [[{ text: s.back, callback_data: data }]] };
+}
+function cancelKb(lang: Lang) {
+  const s = S(lang);
+  return { inline_keyboard: [[{ text: s.cancel, callback_data: "m:cancel" }]] };
 }
 
-/* ------------------------- Keyboards ------------------------- */
+function homeKb(lang: Lang, hasDest: boolean) {
+  const s = S(lang);
+  const rows: any[] = [];
 
-function mainMenu(lang: Lang, hasDest: boolean, realtimeEnabled: boolean) {
-  const row1 = hasDest
-    ? [{ text: btn(lang, "➕ دنبال کردن کانال", "➕ Follow Channel"), callback_data: "menu:follow" }]
-    : [{ text: btn(lang, "🎯 تنظیم کانال مقصد", "🎯 Set Destination"), callback_data: "menu:newdest" }];
+  if (!hasDest) {
+    rows.push([{ text: s.setDest, callback_data: "m:newdest" }]);
+    rows.push([{ text: s.help, callback_data: "m:help" }]);
+    rows.push([{ text: s.settings, callback_data: "m:settings" }]);
+    return { inline_keyboard: rows };
+  }
 
-  const row2 = [
-    { text: btn(lang, "📋 کانال‌های من", "📋 My Channels"), callback_data: "menu:list" },
-    { text: btn(lang, "🧾 خلاصه (Digest)", "🧾 Digest"), callback_data: "menu:digest" },
-  ];
-
-  const row3 = [
-    {
-      text: realtimeEnabled ? btn(lang, "⚡ ریل‌تایم: روشن", "⚡ Realtime: ON") : btn(lang, "⚡ ریل‌تایم: خاموش", "⚡ Realtime: OFF"),
-      callback_data: "menu:toggle_realtime",
-    },
-  ];
-
-  const row4 = [
-    { text: btn(lang, "🌐 زبان", "🌐 Language"), callback_data: "menu:lang" },
-    { text: btn(lang, "❓ راهنما", "❓ Help"), callback_data: "menu:help" },
-  ];
-
-  const row5 = hasDest ? [{ text: btn(lang, "✅ تست ارسال", "✅ Test Delivery"), callback_data: "menu:testdest" }] : [];
-
-  const inline_keyboard: any[] = [row1, row2, row3, row4];
-  if (row5.length) inline_keyboard.push(row5);
-  return { inline_keyboard };
+  rows.push([
+    { text: s.addChannel, callback_data: "m:follow" },
+    { text: s.myChannels, callback_data: "m:list:0" },
+  ]);
+  rows.push([{ text: s.settings, callback_data: "m:settings" }]);
+  rows.push([{ text: s.help, callback_data: "m:help" }]);
+  return { inline_keyboard: rows };
 }
 
-function cancelKeyboard(lang: Lang) {
-  return { inline_keyboard: [[{ text: btn(lang, "✖️ لغو", "✖️ Cancel"), callback_data: "menu:cancel" }]] };
+function settingsKb(lang: Lang, prefs: any, hasDest: boolean) {
+  const s = S(lang);
+  const rows: any[] = [];
+
+  rows.push([
+    { text: s.language, callback_data: "set:lang" },
+    { text: `${s.realtime}: ${prefs.realtime_enabled ? s.realtimeOn : s.realtimeOff}`, callback_data: "set:rt" },
+  ]);
+
+  rows.push([{ text: s.digest, callback_data: "set:digest" }]);
+  rows.push([{ text: s.quiet, callback_data: "set:quiet" }]);
+  rows.push([{ text: s.defaultBackfill, callback_data: "set:dbf" }]);
+
+  if (hasDest) rows.push([{ text: s.testDelivery, callback_data: "set:test" }]);
+
+  rows.push([{ text: s.back, callback_data: "m:home" }]);
+  return { inline_keyboard: rows };
 }
 
-function backKeyboard(lang: Lang) {
-  return { inline_keyboard: [[{ text: btn(lang, "⬅️ برگشت", "⬅️ Back"), callback_data: "menu:back" }]] };
-}
-
-function digestMenuKeyboard(lang: Lang) {
-  return {
-    inline_keyboard: [
-      [
-        { text: btn(lang, "⚙️ تنظیم بازه", "⚙️ Set Interval"), callback_data: "digest:set_hours" },
-        { text: btn(lang, "📤 ارسال همین الان", "📤 Send Now"), callback_data: "digest:send_now" },
-      ],
-      [{ text: btn(lang, "⬅️ برگشت", "⬅️ Back"), callback_data: "menu:back" }],
-    ],
-  };
-}
-
-function channelRowKeyboard(lang: Lang, u: string, paused: number, mode: string) {
-  const pauseBtn = paused
-    ? { text: btn(lang, "▶️ ادامه", "▶️ Resume"), callback_data: `ch:resume:${u}` }
-    : { text: btn(lang, "⏸ توقف", "⏸ Pause"), callback_data: `ch:pause:${u}` };
-
-  const modeBtn =
-    mode === "digest"
-      ? { text: btn(lang, "⚡ لحظه‌ای", "⚡ Realtime"), callback_data: `ch:mode:realtime:${u}` }
-      : { text: btn(lang, "🧾 خلاصه", "🧾 Digest"), callback_data: `ch:mode:digest:${u}` };
+function channelKb(lang: Lang, u: string, paused: number, mode: string) {
+  const s = S(lang);
+  const pauseBtn = paused ? { text: s.resume, callback_data: `c:resume:${u}` } : { text: s.pause, callback_data: `c:pause:${u}` };
+  const modeBtn = mode === "digest" ? { text: s.modeRealtime, callback_data: `c:mode:realtime:${u}` } : { text: s.modeDigest, callback_data: `c:mode:digest:${u}` };
 
   return {
     inline_keyboard: [
       [pauseBtn, modeBtn],
-      [
-        { text: btn(lang, "🔎 فیلترها", "🔎 Filters"), callback_data: `ch:filters:${u}` },
-        { text: btn(lang, "🗑 حذف", "🗑 Unfollow"), callback_data: `ch:unfollow:${u}` },
-      ],
-      [{ text: btn(lang, "⬅️ برگشت", "⬅️ Back"), callback_data: "menu:list" }],
+      [{ text: s.filters, callback_data: `f:menu:${u}` }, { text: s.backfill, callback_data: `bf:menu:${u}` }],
+      [{ text: s.unfollow, callback_data: `c:unfollow:${u}` }],
+      [{ text: s.back, callback_data: "m:list:0" }],
     ],
   };
 }
 
-function filtersKeyboard(lang: Lang, u: string) {
+function filtersKb(lang: Lang, u: string) {
+  const s = S(lang);
+  return {
+    inline_keyboard: [
+      [{ text: s.setInclude, callback_data: `f:set_inc:${u}` }, { text: s.setExclude, callback_data: `f:set_exc:${u}` }],
+      [{ text: s.clearFilters, callback_data: `f:clear:${u}` }],
+      [{ text: s.back, callback_data: `m:channel:${u}` }],
+    ],
+  };
+}
+
+function backfillKb(lang: Lang, u: string) {
+  const s = S(lang);
   return {
     inline_keyboard: [
       [
-        { text: btn(lang, "➕ کلمات شامل", "➕ Include"), callback_data: `f:set_include:${u}` },
-        { text: btn(lang, "➖ کلمات حذف", "➖ Exclude"), callback_data: `f:set_exclude:${u}` },
+        { text: "0", callback_data: `bf:set:${u}:0` },
+        { text: "3", callback_data: `bf:set:${u}:3` },
+        { text: "10", callback_data: `bf:set:${u}:10` },
       ],
-      [
-        { text: btn(lang, "🧹 پاک کردن فیلترها", "🧹 Clear Filters"), callback_data: `f:clear:${u}` },
-        { text: btn(lang, "⬅️ برگشت", "⬅️ Back"), callback_data: `menu:channel:${u}` },
-      ],
+      [{ text: s.back, callback_data: `m:channel:${u}` }],
     ],
   };
 }
 
-/* ------------------------- Scraper ------------------------- */
-
+/** ------------------- scraper helpers ------------------- */
 function decodeHtmlEntities(s: string) {
   const named: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " " };
   return s
@@ -264,11 +507,27 @@ function stripHtml(html: string) {
   return decodeHtmlEntities(noTags).replace(/\n{3,}/g, "\n\n").trim();
 }
 
-type ScrapedPost = { postId: number; text: string; link: string };
+function extractPhotoUrls(htmlSlice: string): string[] {
+  const out: string[] = [];
+  const re1 = /background-image\s*:\s*url\(['"]([^'"]+)['"]\)/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re1.exec(htmlSlice)) !== null) out.push(m[1]);
+
+  const re2 = /<img[^>]+src="([^"]+)"/gi;
+  while ((m = re2.exec(htmlSlice)) !== null) out.push(m[1]);
+
+  const uniq = new Set<string>();
+  for (const u of out) {
+    if (!u) continue;
+    const norm = u.startsWith("//") ? `https:${u}` : u;
+    uniq.add(norm);
+  }
+  return [...uniq].slice(0, 10);
+}
 
 async function fetchTme(username: string): Promise<string> {
   const url = `${TME_BASE}${username}`;
-  const res = await fetch(url, {
+  const req = new Request(url, {
     headers: {
       "user-agent":
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122 Safari/537.36",
@@ -277,7 +536,16 @@ async function fetchTme(username: string): Promise<string> {
       pragma: "no-cache",
     },
   });
+
+  const cache = caches.default;
+  const cached = await cache.match(req);
+  if (cached) return await cached.text();
+
+  const res = await fetch(req, { cf: { cacheTtl: 15, cacheEverything: true } as any });
   if (!res.ok) throw new Error(`t.me fetch failed ${res.status} for ${username}`);
+
+  const clone = res.clone();
+  await cache.put(req, clone);
   return await res.text();
 }
 
@@ -296,7 +564,7 @@ function scrapeTmePreview(username: string, html: string): ScrapedPost[] {
     if (!Number.isFinite(postId)) continue;
 
     const start = m.index;
-    const slice = html.slice(start, start + 50000);
+    const slice = html.slice(start, start + 80000);
 
     const textMatch =
       /<div class="tgme_widget_message_text[^"]*">([\s\S]*?)<\/div>/.exec(slice) ||
@@ -305,17 +573,9 @@ function scrapeTmePreview(username: string, html: string): ScrapedPost[] {
     const raw = textMatch ? textMatch[1] : "";
     const text = raw ? stripHtml(raw) : "";
 
-    posts.push({ postId, text, link: `https://t.me/${username}/${postId}` });
-  }
+    const photos = extractPhotoUrls(slice);
 
-  if (!posts.length) {
-    const re2 = /href="https:\/\/t\.me\/([^"\/]+)\/(\d+)"/g;
-    while ((m = re2.exec(html)) !== null) {
-      if (m[1].toLowerCase() !== wanted) continue;
-      const postId = Number(m[2]);
-      if (!Number.isFinite(postId)) continue;
-      posts.push({ postId, text: "", link: `https://t.me/${m[1]}/${postId}` });
-    }
+    posts.push({ postId, text, photos, link: `https://t.me/${username}/${postId}` });
   }
 
   const uniq = new Map<number, ScrapedPost>();
@@ -323,8 +583,7 @@ function scrapeTmePreview(username: string, html: string): ScrapedPost[] {
   return [...uniq.values()].sort((a, b) => a.postId - b.postId);
 }
 
-/* ------------------------- Filters ------------------------- */
-
+/** ------------------- simple include/exclude filters ------------------- */
 function safeParseKeywords(raw: any): string[] {
   try {
     if (!raw) return [];
@@ -352,9 +611,86 @@ function textPassesFilters(text: string, include: string[], exclude: string[]) {
   return false;
 }
 
-/* ------------------------- Realtime delivery (atomic lock) ------------------------- */
+/** ------------------- quiet hours ------------------- */
+function isQuietNow(prefs: { quiet_start: number; quiet_end: number }) {
+  const qs = Number(prefs.quiet_start ?? -1);
+  const qe = Number(prefs.quiet_end ?? -1);
+  if (qs < 0 || qe < 0) return false;
 
-async function deliverRealtime(env: Env, userId: number, destChatId: number, username: string, post: ScrapedPost, lang: Lang) {
+  const h = utcHourNow();
+  if (qs === qe) return true;
+  if (qs < qe) return h >= qs && h < qe;
+  return h >= qs || h < qe;
+}
+
+/** ------------------- feed rendering ------------------- */
+function renderPostHtml(lang: Lang, username: string, post: ScrapedPost) {
+  const s = S(lang);
+  const raw = (post.text || "").trim() || s.noText;
+
+  const maxTotal = 3400;
+  const text = raw.length > maxTotal ? raw.slice(0, maxTotal) + "…" : raw;
+
+  const previewLen = 220;
+  const preview = text.length > previewLen ? text.slice(0, previewLen) + "…" : text;
+
+  const header = `<b>@${escapeHtml(username)}</b> <code>#${post.postId}</code>`;
+  const previewQ = `<blockquote>${escapeHtml(preview)}</blockquote>`;
+  const fullQ = text.length > previewLen + 10 ? `\n<blockquote expandable>${escapeHtml(text)}</blockquote>` : "";
+
+  return `${header}\n${previewQ}${fullQ}`;
+}
+
+async function sendFeedPost(env: Env, destChatId: number, lang: Lang, username: string, post: ScrapedPost) {
+  const s = S(lang);
+  const body = renderPostHtml(lang, username, post);
+
+  // media first (instagram-ish)
+  if (post.photos?.length) {
+    const caption = `<b>@${escapeHtml(username)}</b> <code>#${post.postId}</code>`;
+    try {
+      if (post.photos.length >= 2) {
+        const media = post.photos.slice(0, 10).map((url, idx) => {
+          const item: any = { type: "photo", media: url };
+          if (idx === 0) {
+            item.caption = caption;
+            item.parse_mode = "HTML";
+          }
+          return item;
+        });
+        await tg(env, "sendMediaGroup", { chat_id: destChatId, media });
+      } else {
+        await tg(env, "sendPhoto", { chat_id: destChatId, photo: post.photos[0], caption, parse_mode: "HTML" });
+      }
+    } catch {
+      // ignore, fallback to text-only below
+    }
+  }
+
+  // readable text in-app + original button
+  await tg(env, "sendMessage", {
+    chat_id: destChatId,
+    text: body,
+    parse_mode: "HTML",
+    disable_web_page_preview: true,
+    reply_markup: { inline_keyboard: [[{ text: s.openOriginal, url: post.link }]] },
+  });
+}
+
+/** ------------------- delivery (dedupe + quiet queue) ------------------- */
+async function markDestinationBad(db: D1Database, userId: number) {
+  await db.prepare("UPDATE destinations SET verified=0 WHERE user_id=?").bind(userId).run();
+}
+
+async function deliverRealtime(env: Env, userId: number, destChatId: number, username: string, post: ScrapedPost, prefs: any) {
+  if (isQuietNow(prefs)) {
+    await env.DB
+      .prepare("INSERT OR IGNORE INTO queued_realtime(user_id, username, post_id, queued_at) VALUES(?, ?, ?, ?)")
+      .bind(userId, username, post.postId, nowSec())
+      .run();
+    return;
+  }
+
   const lock = await env.DB
     .prepare("INSERT OR IGNORE INTO deliveries(user_id, username, post_id, created_at) VALUES(?, ?, ?, ?)")
     .bind(userId, username, post.postId, nowSec())
@@ -362,52 +698,92 @@ async function deliverRealtime(env: Env, userId: number, destChatId: number, use
 
   if ((lock as any)?.meta?.changes === 0) return;
 
-  const header = `@${username}`;
-  const body = post.text ? post.text : lang === "fa" ? "(بدون متن)" : "(no text)";
-  const msg = `${header}\n${post.link}\n\n${body}`.slice(0, 3900);
-
   try {
-    await tg(env, "sendMessage", { chat_id: destChatId, text: msg });
-  } catch (e) {
+    await sendFeedPost(env, destChatId, prefs.lang, username, post);
+  } catch (e: any) {
+    if (e instanceof TelegramError && (e.code === 403 || e.code === 400)) {
+      await markDestinationBad(env.DB, userId);
+    }
     await env.DB.prepare("DELETE FROM deliveries WHERE user_id=? AND username=? AND post_id=?").bind(userId, username, post.postId).run();
     throw e;
   }
 }
 
-/* ------------------------- UX text ------------------------- */
+async function flushQueuedRealtime(env: Env, userId: number, prefs: any) {
+  if (isQuietNow(prefs)) return;
 
-function startText(lang: Lang, hasDest: boolean, realtimeEnabled: boolean, digestHours: number) {
-  return t(
-    lang,
-    ["👋 سلام!", hasDest ? "✅ کانال مقصد تنظیم شده." : "⚠️ هنوز کانال مقصد رو تنظیم نکردی.", realtimeEnabled ? "⚡ ارسال لحظه‌ای: روشن" : "⚡ ارسال لحظه‌ای: خاموش (فقط خلاصه)", `🧾 بازه خلاصه: هر ${digestHours} ساعت`, "", "از دکمه‌ها استفاده کن 👇"].join("\n"),
-    ["👋 Hey!", hasDest ? "✅ Destination is set." : "⚠️ You haven’t set a destination yet.", realtimeEnabled ? "⚡ Realtime forwarding: ON" : "⚡ Realtime forwarding: OFF (digest only)", `🧾 Digest interval: every ${digestHours} hours`, "", "Use the buttons below 👇"].join("\n")
-  );
-}
-
-function helpText(lang: Lang) {
-  return t(
-    lang,
-    ["❓ راهنما", "", "Realtime (لحظه‌ای): هر پست جدید فوراً فوروارد می‌شود.", "Digest (خلاصه): پست‌ها جمع می‌شوند و هر X ساعت یکجا ارسال می‌شوند.", "", "⚡ اگر «ریل‌تایم: خاموش» باشد، هیچ چیز لحظه‌ای ارسال نمی‌شود (حتی کانال‌های realtime).", "", "📌 این نسخه از پیش‌نمایش وب t.me/s استفاده می‌کند (فقط کانال‌های عمومی)."].join("\n"),
-    ["❓ Help", "", "Realtime: forwards new posts immediately.", "Digest: batches posts and sends a summary every X hours.", "", "⚡ If “Realtime: OFF”, nothing is forwarded instantly (even realtime channels).", "", "Note: This version scrapes t.me/s (public channels only)."].join("\n")
-  );
-}
-
-/* ------------------------- Menus ------------------------- */
-
-async function sendMenu(env: Env, userId: number) {
   const dest = await getDestination(env.DB, userId);
-  const prefs = await ensurePrefs(env.DB, userId);
-  const hasDest = !!dest?.verified;
+  if (!dest?.verified) return;
 
-  await tg(env, "sendMessage", {
-    chat_id: userId,
-    text: startText(prefs.lang, hasDest, !!prefs.realtime_enabled, prefs.digest_hours),
-    reply_markup: mainMenu(prefs.lang, hasDest, !!prefs.realtime_enabled),
-  });
+  const rows = await env.DB
+    .prepare(
+      `SELECT qr.username, qr.post_id, sp.text, sp.link
+       FROM queued_realtime qr
+       LEFT JOIN scraped_posts sp ON sp.username=qr.username AND sp.post_id=qr.post_id
+       WHERE qr.user_id=?
+       ORDER BY qr.queued_at ASC
+       LIMIT 20`
+    )
+    .bind(userId)
+    .all<any>();
+
+  if (!rows.results.length) return;
+
+  for (const r of rows.results) {
+    const post: ScrapedPost = {
+      postId: Number(r.post_id),
+      text: String(r.text || ""),
+      link: String(r.link || `https://t.me/${r.username}/${r.post_id}`),
+      photos: [],
+    };
+
+    try {
+      await deliverRealtime(env, userId, Number(dest.chat_id), String(r.username), post, prefs);
+      await env.DB.prepare("DELETE FROM queued_realtime WHERE user_id=? AND username=? AND post_id=?").bind(userId, String(r.username), Number(r.post_id)).run();
+    } catch {
+      break;
+    }
+  }
 }
 
-async function createDestToken(env: Env, userId: number) {
+/** ------------------- menus ------------------- */
+async function sendHome(env: Env, userId: number, message_id?: number) {
   const prefs = await ensurePrefs(env.DB, userId);
+  const dest = await getDestination(env.DB, userId);
+  const hasDest = !!dest?.verified;
+  const s = S(prefs.lang);
+
+  const text = [
+    s.title,
+    "",
+    hasDest ? t(prefs.lang, "✅ کانال مقصد تنظیم شده.", "✅ Destination is set.") : t(prefs.lang, "⚠️ هنوز کانال مقصد را تنظیم نکردی.", "⚠️ You haven’t set a destination yet."),
+    "",
+    s.homeHint,
+  ].join("\n");
+
+  await sendOrEdit(env, { chat_id: userId, message_id, text, reply_markup: homeKb(prefs.lang, hasDest) });
+}
+
+async function showHelp(env: Env, userId: number, message_id?: number) {
+  const prefs = await ensurePrefs(env.DB, userId);
+  const dest = await getDestination(env.DB, userId);
+  await sendOrEdit(env, { chat_id: userId, message_id, text: S(prefs.lang).helpText, reply_markup: homeKb(prefs.lang, !!dest?.verified) });
+}
+
+async function showSettings(env: Env, userId: number, message_id?: number) {
+  const prefs = await ensurePrefs(env.DB, userId);
+  const dest = await getDestination(env.DB, userId);
+  const hasDest = !!dest?.verified;
+  const s = S(prefs.lang);
+
+  const text = s.settingsText(prefs.realtime_enabled, prefs.digest_hours, prefs.quiet_start, prefs.quiet_end, prefs.default_backfill_n);
+
+  await sendOrEdit(env, { chat_id: userId, message_id, text, reply_markup: settingsKb(prefs.lang, prefs, hasDest) });
+}
+
+async function createDestToken(env: Env, userId: number, message_id?: number) {
+  const prefs = await ensurePrefs(env.DB, userId);
+  const s = S(prefs.lang);
 
   const token = makeToken();
   await env.DB
@@ -415,184 +791,135 @@ async function createDestToken(env: Env, userId: number) {
     .bind(token, userId, nowSec())
     .run();
 
-  await tg(env, "sendMessage", {
-    chat_id: userId,
-    text: t(
-      prefs.lang,
-      `🔑 توکن مقصد: ${token}\n\n۱) کانال مقصد رو بساز.\n۲) ربات رو ادمین کن.\n۳) همین متن رو داخل کانال ارسال کن:\nDEST ${token}`,
-      `🔑 DEST token: ${token}\n\n1) Create destination channel.\n2) Add bot as admin.\n3) Post this in the channel:\nDEST ${token}`
-    ),
-    reply_markup: backKeyboard(prefs.lang),
-  });
+  const line = `DEST ${token}`;
+
+  const text = [
+    `✅ ${s.destTitle}`,
+    "",
+    s.destSteps,
+    "",
+    s.copyHint,
+    "",
+    `<pre>${escapeHtml(line)}</pre>`,
+  ].join("\n");
+
+  await sendOrEdit(env, { chat_id: userId, message_id, text, parse_mode: "HTML", reply_markup: backKb(prefs.lang, "m:home") });
 }
 
 async function startFollowFlow(env: Env, userId: number) {
-  const dest = await getDestination(env.DB, userId);
   const prefs = await ensurePrefs(env.DB, userId);
+  const dest = await getDestination(env.DB, userId);
+  const s = S(prefs.lang);
 
   if (!dest?.verified) {
-    await tg(env, "sendMessage", {
-      chat_id: userId,
-      text: t(prefs.lang, "⚠️ اول کانال مقصد رو تنظیم کن.", "⚠️ Set destination first."),
-      reply_markup: mainMenu(prefs.lang, false, !!prefs.realtime_enabled),
-    });
+    await tg(env, "sendMessage", { chat_id: userId, text: s.needDestFirst, reply_markup: homeKb(prefs.lang, false) });
     return;
   }
 
   await setState(env.DB, userId, "await_follow_username");
-  await tg(env, "sendMessage", {
-    chat_id: userId,
-    text: t(prefs.lang, "نام کاربری یا لینک کانال عمومی رو بفرست:\nمثلاً @khabarfuri", "Send a public channel username/link:\nExample: @khabarfuri"),
-    reply_markup: cancelKeyboard(prefs.lang),
-  });
+  await tg(env, "sendMessage", { chat_id: userId, text: s.sendUsername, reply_markup: cancelKb(prefs.lang) });
 }
 
-async function digestMenu(env: Env, userId: number) {
+async function showList(env: Env, userId: number, page: number, message_id?: number) {
   const prefs = await ensurePrefs(env.DB, userId);
-  await tg(env, "sendMessage", {
-    chat_id: userId,
-    text: t(
-      prefs.lang,
-      `🧾 خلاصه (Digest)\n\nبازه فعلی: هر ${prefs.digest_hours} ساعت\n\nمی‌تونی بازه رو تغییر بدی یا همین الان خلاصه بگیری.`,
-      `🧾 Digest\n\nCurrent interval: every ${prefs.digest_hours} hours\n\nChange interval or send digest now.`
-    ),
-    reply_markup: digestMenuKeyboard(prefs.lang),
-  });
-}
+  const s = S(prefs.lang);
 
-async function showList(env: Env, userId: number) {
-  const prefs = await ensurePrefs(env.DB, userId);
+  const totalRow = await env.DB.prepare("SELECT COUNT(*) AS n FROM user_sources WHERE user_id=?").bind(userId).first<any>();
+  const total = Number(totalRow?.n ?? 0);
+
+  const offset = page * LIST_PAGE_SIZE;
 
   const rows = await env.DB
-    .prepare("SELECT username, paused, mode FROM user_sources WHERE user_id=? ORDER BY username ASC")
-    .bind(userId)
+    .prepare(
+      `SELECT username, paused, mode
+       FROM user_sources
+       WHERE user_id=?
+       ORDER BY username ASC
+       LIMIT ? OFFSET ?`
+    )
+    .bind(userId, LIST_PAGE_SIZE, offset)
     .all<any>();
 
-  if (!rows.results.length) {
-    await tg(env, "sendMessage", {
-      chat_id: userId,
-      text: t(prefs.lang, "هیچ کانالی دنبال نمی‌کنی.", "You aren’t following any channels."),
-      reply_markup: mainMenu(prefs.lang, true, !!prefs.realtime_enabled),
-    });
+  const list = rows.results || [];
+  const hasPrev = page > 0;
+  const hasNext = offset + list.length < total;
+
+  if (!list.length) {
+    await sendOrEdit(env, { chat_id: userId, message_id, text: s.myChannels + "\n\n" + t(prefs.lang, "هیچ کانالی دنبال نمی‌کنی.", "You aren’t following any channels."), reply_markup: homeKb(prefs.lang, true) });
     return;
   }
 
-  const lines = rows.results.map((r: any) => {
+  const lines = list.map((r: any) => {
     const u = String(r.username);
     const paused = Number(r.paused) ? "⏸" : "▶️";
     const mode = r.mode === "digest" ? "🧾" : "⚡";
     return `• @${u}  ${paused} ${mode}`;
   });
 
-  await tg(env, "sendMessage", {
+  const keyboardRows = list.map((r: any) => [{ text: `⚙️ @${r.username}`, callback_data: `m:channel:${r.username}` }]);
+
+  const navRow: any[] = [];
+  if (hasPrev) navRow.push({ text: "⬅️", callback_data: `m:list:${page - 1}` });
+  navRow.push({ text: s.back, callback_data: "m:home" });
+  if (hasNext) navRow.push({ text: "➡️", callback_data: `m:list:${page + 1}` });
+
+  await sendOrEdit(env, {
     chat_id: userId,
-    text: t(
-      prefs.lang,
-      `📋 کانال‌های تو:\n\n${lines.join("\n")}\n\nبرای مدیریت هر کانال «تنظیمات» رو بزن.`,
-      `📋 Your channels:\n\n${lines.join("\n")}\n\nTap “Settings” to manage a channel.`
-    ),
-    reply_markup: {
-      inline_keyboard: [
-        ...rows.results.slice(0, 20).map((r: any) => [
-          { text: btn(prefs.lang, `⚙️ تنظیمات @${r.username}`, `⚙️ Settings @${r.username}`), callback_data: `menu:channel:${r.username}` },
-        ]),
-        [{ text: btn(prefs.lang, "⬅️ برگشت", "⬅️ Back"), callback_data: "menu:back" }],
-      ],
-    },
+    message_id,
+    text: `${s.myChannels}\n\n${lines.join("\n")}\n\n${t(prefs.lang, "برای مدیریت، روی دکمه هر کانال بزن.", "Tap a channel button to manage.")}`,
+    reply_markup: { inline_keyboard: [...keyboardRows, [ { text: s.addChannel, callback_data: "m:follow" } ], [ ...navRow ]] },
   });
 }
 
-async function showChannelSettings(env: Env, userId: number, username: string) {
+async function showChannelSettings(env: Env, userId: number, username: string, message_id?: number) {
   const prefs = await ensurePrefs(env.DB, userId);
+  const s = S(prefs.lang);
 
   const sub = await env.DB
-    .prepare("SELECT paused, mode, include_keywords, exclude_keywords FROM user_sources WHERE user_id=? AND username=?")
+    .prepare("SELECT paused, mode, include_keywords, exclude_keywords, backfill_n FROM user_sources WHERE user_id=? AND username=?")
     .bind(userId, username)
     .first<any>();
 
   if (!sub) {
-    await tg(env, "sendMessage", {
-      chat_id: userId,
-      text: t(prefs.lang, "این کانال پیدا نشد.", "Channel not found."),
-      reply_markup: backKeyboard(prefs.lang),
-    });
+    await sendOrEdit(env, { chat_id: userId, message_id, text: t(prefs.lang, "کانال پیدا نشد.", "Channel not found."), reply_markup: backKb(prefs.lang, "m:list:0") });
     return;
   }
 
   const include = safeParseKeywords(sub.include_keywords);
   const exclude = safeParseKeywords(sub.exclude_keywords);
 
-  const text = t(
-    prefs.lang,
-    [
-      `⚙️ تنظیمات @${username}`,
-      `وضعیت: ${sub.paused ? "⏸ متوقف" : "▶️ فعال"}`,
-      `حالت ارسال: ${sub.mode === "digest" ? "🧾 خلاصه" : "⚡ لحظه‌ای"}`,
-      `شامل: ${include.length ? include.join(", ") : "—"}`,
-      `حذف: ${exclude.length ? exclude.join(", ") : "—"}`,
-      "",
-      prefs.realtime_enabled ? "⚡ ریل‌تایم کلی: روشن" : "⚡ ریل‌تایم کلی: خاموش (فقط خلاصه)",
-    ].join("\n"),
-    [
-      `⚙️ Settings @${username}`,
-      `Status: ${sub.paused ? "⏸ paused" : "▶️ active"}`,
-      `Mode: ${sub.mode === "digest" ? "🧾 digest" : "⚡ realtime"}`,
-      `Include: ${include.length ? include.join(", ") : "—"}`,
-      `Exclude: ${exclude.length ? exclude.join(", ") : "—"}`,
-      "",
-      prefs.realtime_enabled ? "⚡ Global realtime: ON" : "⚡ Global realtime: OFF (digest only)",
-    ].join("\n")
-  );
+  const text = [
+    s.chSettingsTitle(username),
+    t(prefs.lang, `وضعیت: ${sub.paused ? "⏸ متوقف" : "▶️ فعال"}`, `Status: ${sub.paused ? "⏸ paused" : "▶️ active"}`),
+    t(prefs.lang, `حالت: ${sub.mode === "digest" ? "🧾 خلاصه" : "⚡ ریل‌تایم"}`, `Mode: ${sub.mode === "digest" ? "🧾 digest" : "⚡ realtime"}`),
+    t(prefs.lang, `بک‌فیل: ${Number(sub.backfill_n ?? 3)}`, `Backfill: ${Number(sub.backfill_n ?? 3)}`),
+    "",
+    t(prefs.lang, `شامل: ${include.length ? include.join(", ") : "—"}`, `Include: ${include.length ? include.join(", ") : "—"}`),
+    t(prefs.lang, `حذف: ${exclude.length ? exclude.join(", ") : "—"}`, `Exclude: ${exclude.length ? exclude.join(", ") : "—"}`),
+  ].join("\n");
 
-  await tg(env, "sendMessage", {
-    chat_id: userId,
-    text,
-    reply_markup: channelRowKeyboard(prefs.lang, username, Number(sub.paused), String(sub.mode)),
-  });
+  await sendOrEdit(env, { chat_id: userId, message_id, text, reply_markup: channelKb(prefs.lang, username, Number(sub.paused), String(sub.mode)) });
 }
 
-async function showFilters(env: Env, userId: number, username: string) {
+async function showFilters(env: Env, userId: number, username: string, message_id?: number) {
   const prefs = await ensurePrefs(env.DB, userId);
-
-  const sub = await env.DB
-    .prepare("SELECT include_keywords, exclude_keywords FROM user_sources WHERE user_id=? AND username=?")
-    .bind(userId, username)
-    .first<any>();
-
-  if (!sub) return;
-
-  const include = safeParseKeywords(sub.include_keywords);
-  const exclude = safeParseKeywords(sub.exclude_keywords);
-
-  await tg(env, "sendMessage", {
-    chat_id: userId,
-    text: t(
-      prefs.lang,
-      `🔎 فیلترهای @${username}\n\nشامل: ${include.length ? include.join(", ") : "—"}\nحذف: ${exclude.length ? exclude.join(", ") : "—"}`,
-      `🔎 Filters for @${username}\n\nInclude: ${include.length ? include.join(", ") : "—"}\nExclude: ${exclude.length ? exclude.join(", ") : "—"}`
-    ),
-    reply_markup: filtersKeyboard(prefs.lang, username),
-  });
+  await sendOrEdit(env, { chat_id: userId, message_id, text: t(prefs.lang, `🔎 فیلترهای @${username}`, `🔎 Filters for @${username}`), reply_markup: filtersKb(prefs.lang, username) });
 }
 
-/* ------------------------- Follow input (+ backfill rules) ------------------------- */
-
+/** ------------------- follow input ------------------- */
 async function handleFollowInput(env: Env, userId: number, input: string) {
   const prefs = await ensurePrefs(env.DB, userId);
   const dest = await getDestination(env.DB, userId);
+  const s = S(prefs.lang);
 
   const username = normalizeUsername(input);
   if (!username) {
-    await tg(env, "sendMessage", {
-      chat_id: userId,
-      text: t(prefs.lang, "فرمت اشتباهه. مثل @name بفرست.", "Invalid format. Send @name."),
-      reply_markup: cancelKeyboard(prefs.lang),
-    });
+    await tg(env, "sendMessage", { chat_id: userId, text: s.invalidFormat, reply_markup: cancelKb(prefs.lang) });
     return;
   }
 
   if (!dest?.verified) {
-    await sendMenu(env, userId);
+    await sendHome(env, userId);
     return;
   }
 
@@ -601,30 +928,34 @@ async function handleFollowInput(env: Env, userId: number, input: string) {
     const html = await fetchTme(username);
     posts = scrapeTmePreview(username, html);
     if (!posts.length) {
-      await tg(env, "sendMessage", {
-        chat_id: userId,
-        text: t(prefs.lang, `از @${username} چیزی نتونستم بخونم. عمومی هست؟`, `Couldn’t read @${username}. Is it public?`),
-        reply_markup: cancelKeyboard(prefs.lang),
-      });
+      await tg(env, "sendMessage", { chat_id: userId, text: s.couldntRead(username), reply_markup: cancelKb(prefs.lang) });
       return;
     }
   } catch {
-    await tg(env, "sendMessage", {
-      chat_id: userId,
-      text: t(prefs.lang, "الان نتونستم دریافت کنم. چند دقیقه دیگه امتحان کن.", "Fetch failed. Try again in a minute."),
-      reply_markup: cancelKeyboard(prefs.lang),
-    });
+    await tg(env, "sendMessage", { chat_id: userId, text: s.fetchFailed, reply_markup: cancelKb(prefs.lang) });
     return;
   }
 
-  await env.DB.prepare("INSERT OR IGNORE INTO sources(username, last_post_id, updated_at) VALUES(?, 0, ?)").bind(username, nowSec()).run();
-
   await env.DB
-    .prepare("INSERT OR IGNORE INTO user_sources(user_id, username, created_at, paused, mode, include_keywords, exclude_keywords) VALUES(?, ?, ?, 0, 'realtime', '[]', '[]')")
-    .bind(userId, username, nowSec())
+    .prepare(
+      `INSERT OR IGNORE INTO sources(username, last_post_id, updated_at, next_check_at, check_every_sec, fail_count, last_error_at, last_success_at)
+       VALUES(?, 0, ?, 0, ?, 0, 0, 0)`
+    )
+    .bind(username, nowSec(), MIN_POLL_SEC)
     .run();
 
-  const backfill = posts.slice(-FOLLOW_BACKFILL_N);
+  await env.DB
+    .prepare(
+      `INSERT OR IGNORE INTO user_sources(
+        user_id, username, created_at, paused, mode, include_keywords, exclude_keywords, backfill_n
+      ) VALUES(?, ?, ?, 0, 'realtime', '[]', '[]', ?)`
+    )
+    .bind(userId, username, nowSec(), clamp(Number(prefs.default_backfill_n ?? 3), 0, 10))
+    .run();
+
+  const backfillN = clamp(Number(prefs.default_backfill_n ?? 3), 0, 10);
+  const backfill = backfillN > 0 ? posts.slice(-backfillN) : [];
+
   for (const p of backfill) {
     await env.DB
       .prepare("INSERT OR IGNORE INTO scraped_posts(username, post_id, text, link, scraped_at) VALUES(?, ?, ?, ?, ?)")
@@ -632,27 +963,44 @@ async function handleFollowInput(env: Env, userId: number, input: string) {
       .run();
   }
 
-  if (prefs.realtime_enabled) {
+  if (prefs.realtime_enabled && backfill.length) {
     for (const p of backfill) {
-      await deliverRealtime(env, userId, Number(dest.chat_id), username, p, prefs.lang).catch(() => {});
+      await deliverRealtime(env, userId, Number(dest.chat_id), username, p, prefs).catch(() => {});
     }
   }
 
   const latestId = posts[posts.length - 1].postId;
-  await env.DB.prepare("UPDATE sources SET last_post_id=?, updated_at=? WHERE username=?").bind(latestId, nowSec(), username).run();
+  await env.DB
+    .prepare(
+      "UPDATE sources SET last_post_id=?, updated_at=?, next_check_at=?, check_every_sec=?, fail_count=0, last_error=NULL, last_error_at=0, last_success_at=? WHERE username=?"
+    )
+    .bind(latestId, nowSec(), nowSec() + MIN_POLL_SEC, MIN_POLL_SEC, nowSec(), username)
+    .run();
 
   await clearState(env.DB, userId);
 
   await tg(env, "sendMessage", {
     chat_id: userId,
-    text: prefs.realtime_enabled
-      ? t(prefs.lang, `✅ @${username} اضافه شد. (۳ پست آخر ارسال شد)`, `✅ Followed @${username}. (Sent last 3 posts)`)
-      : t(prefs.lang, `✅ @${username} اضافه شد. (ریل‌تایم خاموش است؛ فقط خلاصه)`, `✅ Followed @${username}. (Realtime is OFF; digest only)`),
-    reply_markup: mainMenu(prefs.lang, true, !!prefs.realtime_enabled),
+    text: prefs.realtime_enabled ? s.followed(username, backfillN) : s.followedNoRealtime(username),
+    reply_markup: homeKb(prefs.lang, true),
   });
 }
 
-/* ------------------------- Digest sending ------------------------- */
+/** ------------------- digest ------------------- */
+function splitTelegramText(text: string, max = 3800): string[] {
+  const parts: string[] = [];
+  let cur = "";
+  for (const block of text.split("\n\n")) {
+    if ((cur + (cur ? "\n\n" : "") + block).length <= max) {
+      cur = cur ? `${cur}\n\n${block}` : block;
+    } else {
+      if (cur) parts.push(cur);
+      cur = block;
+    }
+  }
+  if (cur) parts.push(cur);
+  return parts;
+}
 
 async function sendDigestForUser(env: Env, userId: number, force = false) {
   const prefs = await ensurePrefs(env.DB, userId);
@@ -664,16 +1012,7 @@ async function sendDigestForUser(env: Env, userId: number, force = false) {
     .bind(userId)
     .all<any>();
 
-  if (!subs.results.length) {
-    if (force) {
-      await tg(env, "sendMessage", {
-        chat_id: userId,
-        text: t(prefs.lang, "هیچ کانالی در حالت خلاصه نداری.", "You have no digest-mode channels."),
-        reply_markup: mainMenu(prefs.lang, true, !!prefs.realtime_enabled),
-      });
-    }
-    return;
-  }
+  if (!subs.results.length) return;
 
   const digestHours = Number(prefs.digest_hours ?? 6);
   const last = Number(prefs.last_digest_at ?? 0);
@@ -682,7 +1021,7 @@ async function sendDigestForUser(env: Env, userId: number, force = false) {
 
   const since = last || nowSec() - digestHours * 3600;
 
-  const items: { username: string; post_id: number; link: string; text: string; scraped_at: number }[] = [];
+  const items: { username: string; post_id: number; link: string; text: string }[] = [];
 
   for (const s of subs.results) {
     const u = String(s.username);
@@ -690,53 +1029,43 @@ async function sendDigestForUser(env: Env, userId: number, force = false) {
     const exclude = safeParseKeywords(s.exclude_keywords);
 
     const rows = await env.DB
-      .prepare("SELECT username, post_id, link, text, scraped_at FROM scraped_posts WHERE username=? AND scraped_at > ? ORDER BY post_id DESC LIMIT 10")
+      .prepare("SELECT username, post_id, link, text FROM scraped_posts WHERE username=? AND scraped_at > ? ORDER BY post_id DESC LIMIT 20")
       .bind(u, since)
       .all<any>();
 
     for (const r of rows.results) {
       const txt = String(r.text || "");
       if (!textPassesFilters(txt, include, exclude)) continue;
-      items.push({
-        username: String(r.username),
-        post_id: Number(r.post_id),
-        link: String(r.link),
-        text: txt,
-        scraped_at: Number(r.scraped_at),
-      });
+      items.push({ username: String(r.username), post_id: Number(r.post_id), link: String(r.link), text: txt });
     }
   }
 
   items.sort((a, b) => b.post_id - a.post_id);
-  const top = items.slice(0, 20);
+  const top = items.slice(0, 25);
 
   if (!top.length) {
-    if (force) {
-      await tg(env, "sendMessage", {
-        chat_id: userId,
-        text: t(prefs.lang, "چیزی برای خلاصه پیدا نشد.", "Nothing to include in digest."),
-        reply_markup: mainMenu(prefs.lang, true, !!prefs.realtime_enabled),
-      });
-    }
     await setPrefs(env.DB, userId, { last_digest_at: nowSec() });
     return;
   }
 
-  const lines = top.map((it, i) => {
-    const snippet = (it.text || "").replace(/\s+/g, " ").slice(0, 120);
-    const sn = snippet ? ` — ${snippet}` : "";
-    return `${i + 1}) @${it.username}\n${it.link}${sn ? `\n${sn}` : ""}`;
+  const title = t(prefs.lang, `🧾 خلاصه‌ی ${digestHours} ساعت اخیر`, `🧾 Digest for last ${digestHours} hours`);
+  const blocks = top.map((it) => {
+    const snip = (it.text || "").replace(/\s+/g, " ").slice(0, 180);
+    return `@${it.username}\n${it.link}${snip ? `\n${snip}` : ""}`;
   });
 
-  const title = t(prefs.lang, `🧾 خلاصه‌ی ${digestHours} ساعت اخیر`, `🧾 Digest for last ${digestHours} hours`);
-  const msg = `${title}\n\n${lines.join("\n\n")}`.slice(0, 3900);
+  const full = `${title}\n\n${blocks.join("\n\n")}`;
+  const parts = splitTelegramText(full, 3800);
 
-  await tg(env, "sendMessage", { chat_id: Number(dest.chat_id), text: msg });
+  for (let i = 0; i < parts.length; i++) {
+    const suffix = parts.length > 1 ? `\n\n(${i + 1}/${parts.length})` : "";
+    await tg(env, "sendMessage", { chat_id: Number(dest.chat_id), text: (parts[i] + suffix).slice(0, 3900), disable_web_page_preview: true });
+  }
+
   await setPrefs(env.DB, userId, { last_digest_at: nowSec() });
 }
 
-/* ------------------------- Destination claim ------------------------- */
-
+/** ------------------- destination claim ------------------- */
 function parseDestClaim(text: string): string | null {
   const m = /^DEST\s+([A-Za-z0-9_-]{6,64})$/.exec((text || "").trim());
   return m ? m[1] : null;
@@ -761,11 +1090,10 @@ async function handleChannelPost(env: Env, msg: any) {
 
   await env.DB.prepare("DELETE FROM pending_claims WHERE token=?").bind(token).run();
 
-  await sendMenu(env, userId);
+  await sendHome(env, userId);
 }
 
-/* ------------------------- Callbacks ------------------------- */
-
+/** ------------------- callbacks ------------------- */
 async function handleCallback(env: Env, cq: any) {
   const userId = cq.from.id;
   await upsertUser(env.DB, userId);
@@ -775,174 +1103,152 @@ async function handleCallback(env: Env, cq: any) {
   const hasDest = !!dest?.verified;
 
   const data = String(cq.data || "");
+  const message_id = cq?.message?.message_id as number | undefined;
+
   await tg(env, "answerCallbackQuery", { callback_query_id: cq.id });
 
-  if (data === "menu:back") return sendMenu(env, userId);
+  if (data === "m:home") return sendHome(env, userId, message_id);
+  if (data === "m:help") return showHelp(env, userId, message_id);
+  if (data === "m:settings") return showSettings(env, userId, message_id);
 
-  if (data === "menu:help") {
-    await tg(env, "sendMessage", {
-      chat_id: userId,
-      text: helpText(prefs.lang),
-      reply_markup: mainMenu(prefs.lang, hasDest, !!prefs.realtime_enabled),
-    });
-    return;
+  if (data === "m:newdest") return createDestToken(env, userId, message_id);
+  if (data === "m:follow") return startFollowFlow(env, userId);
+
+  if (data.startsWith("m:list:")) {
+    const page = Number(data.split(":")[2] || "0") || 0;
+    return showList(env, userId, Math.max(0, page), message_id);
   }
 
-  if (data === "menu:newdest") return createDestToken(env, userId);
-  if (data === "menu:follow") return startFollowFlow(env, userId);
-  if (data === "menu:list") return showList(env, userId);
-  if (data === "menu:digest") return digestMenu(env, userId);
-
-  if (data === "menu:cancel") {
-    await clearState(env.DB, userId);
-    await sendMenu(env, userId);
-    return;
+  if (data.startsWith("m:channel:")) {
+    const u = data.split(":").slice(2).join(":");
+    return showChannelSettings(env, userId, u, message_id);
   }
 
-  if (data === "menu:lang") {
-    const newLang: Lang = prefs.lang === "fa" ? "en" : "fa";
-    await setPrefs(env.DB, userId, { lang: newLang });
-    await sendMenu(env, userId);
-    return;
+  // Settings actions
+  if (data === "set:lang") {
+    const next: Lang = prefs.lang === "fa" ? "en" : "fa";
+    await setPrefs(env.DB, userId, { lang: next });
+    return showSettings(env, userId, message_id);
   }
 
-  if (data === "menu:toggle_realtime") {
+  if (data === "set:rt") {
     const next = prefs.realtime_enabled ? 0 : 1;
     await setPrefs(env.DB, userId, { realtime_enabled: next });
-    await tg(env, "sendMessage", {
-      chat_id: userId,
-      text: next
-        ? t(prefs.lang, "⚡ ارسال لحظه‌ای روشن شد.", "⚡ Realtime forwarding enabled.")
-        : t(prefs.lang, "⚡ ارسال لحظه‌ای خاموش شد. فقط خلاصه ارسال می‌شود.", "⚡ Realtime forwarding disabled. Digest only."),
-      reply_markup: mainMenu(prefs.lang, hasDest, !!next),
-    });
+    return showSettings(env, userId, message_id);
+  }
+
+  if (data === "set:digest") {
+    await setState(env.DB, userId, "await_digest_hours");
+    await tg(env, "sendMessage", { chat_id: userId, text: S(prefs.lang).digestAskHours, reply_markup: cancelKb(prefs.lang) });
     return;
   }
 
-  if (data === "menu:testdest") {
-    if (!dest?.verified) {
-      await tg(env, "sendMessage", {
-        chat_id: userId,
-        text: t(prefs.lang, "⚠️ اول مقصد رو تنظیم کن.", "⚠️ Set destination first."),
-        reply_markup: mainMenu(prefs.lang, false, !!prefs.realtime_enabled),
-      });
-      return;
-    }
-    await tg(env, "sendMessage", { chat_id: Number(dest.chat_id), text: t(prefs.lang, "✅ تست ارسال انجام شد.", "✅ Delivery test succeeded.") });
-    await sendMenu(env, userId);
+  if (data === "set:quiet") {
+    await setState(env.DB, userId, "await_quiet_hours");
+    await tg(env, "sendMessage", { chat_id: userId, text: S(prefs.lang).quietAsk, reply_markup: cancelKb(prefs.lang) });
     return;
   }
 
-  if (data.startsWith("menu:channel:")) {
-    const u = data.split(":").slice(2).join(":");
-    return showChannelSettings(env, userId, u);
+  if (data === "set:dbf") {
+    await setState(env.DB, userId, "await_default_backfill");
+    await tg(env, "sendMessage", { chat_id: userId, text: S(prefs.lang).backfillAsk, reply_markup: cancelKb(prefs.lang) });
+    return;
   }
 
-  if (data.startsWith("ch:pause:")) {
+  if (data === "set:test") {
+    if (!dest?.verified) return sendHome(env, userId, message_id);
+    await tg(env, "sendMessage", { chat_id: Number(dest.chat_id), text: S(prefs.lang).testOk });
+    return showSettings(env, userId, message_id);
+  }
+
+  // Channel actions
+  if (data.startsWith("c:pause:")) {
     const u = data.split(":").slice(2).join(":");
     await env.DB.prepare("UPDATE user_sources SET paused=1 WHERE user_id=? AND username=?").bind(userId, u).run();
-    return showChannelSettings(env, userId, u);
+    return showChannelSettings(env, userId, u, message_id);
   }
-
-  if (data.startsWith("ch:resume:")) {
+  if (data.startsWith("c:resume:")) {
     const u = data.split(":").slice(2).join(":");
     await env.DB.prepare("UPDATE user_sources SET paused=0 WHERE user_id=? AND username=?").bind(userId, u).run();
-    return showChannelSettings(env, userId, u);
+    return showChannelSettings(env, userId, u, message_id);
   }
-
-  if (data.startsWith("ch:mode:")) {
+  if (data.startsWith("c:mode:")) {
     const parts = data.split(":");
     const mode = parts[2];
     const u = parts.slice(3).join(":");
     if (mode !== "realtime" && mode !== "digest") return;
     await env.DB.prepare("UPDATE user_sources SET mode=? WHERE user_id=? AND username=?").bind(mode, userId, u).run();
-    return showChannelSettings(env, userId, u);
+    return showChannelSettings(env, userId, u, message_id);
   }
-
-  if (data.startsWith("ch:unfollow:")) {
+  if (data.startsWith("c:unfollow:")) {
     const u = data.split(":").slice(2).join(":");
     await env.DB.prepare("DELETE FROM user_sources WHERE user_id=? AND username=?").bind(userId, u).run();
-    await sendMenu(env, userId);
-    return;
+    return showList(env, userId, 0, message_id);
   }
 
-  if (data.startsWith("ch:filters:")) {
+  // Filters
+  if (data.startsWith("f:menu:")) {
     const u = data.split(":").slice(2).join(":");
-    return showFilters(env, userId, u);
+    return showFilters(env, userId, u, message_id);
   }
-
   if (data.startsWith("f:clear:")) {
     const u = data.split(":").slice(2).join(":");
     await env.DB.prepare("UPDATE user_sources SET include_keywords='[]', exclude_keywords='[]' WHERE user_id=? AND username=?").bind(userId, u).run();
-    return showChannelSettings(env, userId, u);
+    return showChannelSettings(env, userId, u, message_id);
   }
-
-  if (data.startsWith("f:set_include:")) {
+  if (data.startsWith("f:set_inc:")) {
     const u = data.split(":").slice(2).join(":");
     await setState(env.DB, userId, "await_include_keywords", { username: u });
-    await tg(env, "sendMessage", {
-      chat_id: userId,
-      text: t(prefs.lang, `کلمات شامل برای @${u} رو بفرست (با کاما جدا کن).`, `Send include keywords for @${u} (comma-separated).`),
-      reply_markup: cancelKeyboard(prefs.lang),
-    });
+    await tg(env, "sendMessage", { chat_id: userId, text: S(prefs.lang).incPrompt(u), reply_markup: cancelKb(prefs.lang) });
     return;
   }
-
-  if (data.startsWith("f:set_exclude:")) {
+  if (data.startsWith("f:set_exc:")) {
     const u = data.split(":").slice(2).join(":");
     await setState(env.DB, userId, "await_exclude_keywords", { username: u });
-    await tg(env, "sendMessage", {
-      chat_id: userId,
-      text: t(prefs.lang, `کلمات حذف برای @${u} رو بفرست (با کاما جدا کن).`, `Send exclude keywords for @${u} (comma-separated).`),
-      reply_markup: cancelKeyboard(prefs.lang),
-    });
+    await tg(env, "sendMessage", { chat_id: userId, text: S(prefs.lang).excPrompt(u), reply_markup: cancelKb(prefs.lang) });
     return;
   }
 
-  if (data === "digest:set_hours") {
-    await setState(env.DB, userId, "await_digest_hours");
-    await tg(env, "sendMessage", {
-      chat_id: userId,
-      text: t(prefs.lang, "عدد بازه خلاصه رو بفرست (ساعت، ۱ تا ۲۴).", "Send digest interval in hours (1..24)."),
-      reply_markup: cancelKeyboard(prefs.lang),
-    });
+  // Backfill per channel
+  if (data.startsWith("bf:menu:")) {
+    const u = data.split(":").slice(2).join(":");
+    await sendOrEdit(env, { chat_id: userId, message_id, text: t(prefs.lang, `📌 بک‌فیل @${u}\nچند پست آخر هنگام Follow ارسال شود؟`, `📌 Backfill @${u}\nHow many last posts on follow?`), reply_markup: backfillKb(prefs.lang, u) });
     return;
   }
+  if (data.startsWith("bf:set:")) {
+    const parts = data.split(":");
+    const u = parts[2];
+    const n = clamp(Number(parts[3] || 3), 0, 10);
+    await env.DB.prepare("UPDATE user_sources SET backfill_n=? WHERE user_id=? AND username=?").bind(n, userId, u).run();
+    return showChannelSettings(env, userId, u, message_id);
+  }
 
-  if (data === "digest:send_now") {
-    await sendDigestForUser(env, userId, true);
-    await sendMenu(env, userId);
-    return;
+  if (data === "m:cancel") {
+    await clearState(env.DB, userId);
+    return sendHome(env, userId, message_id);
   }
 }
 
-/* ------------------------- Private messages (states) ------------------------- */
-
+/** ------------------- private messages ------------------- */
 async function handlePrivateMessage(env: Env, msg: any) {
   const userId = msg.from.id;
   const text = msg.text || "";
 
   await upsertUser(env.DB, userId);
   const prefs = await ensurePrefs(env.DB, userId);
+  const s = S(prefs.lang);
 
   const cmd = parseCmd(text);
   if (cmd) {
-    if (cmd.cmd === "/start") return sendMenu(env, userId);
-    if (cmd.cmd === "/help") {
-      const dest = await getDestination(env.DB, userId);
-      await tg(env, "sendMessage", {
-        chat_id: userId,
-        text: helpText(prefs.lang),
-        reply_markup: mainMenu(prefs.lang, !!dest?.verified, !!prefs.realtime_enabled),
-      });
-      return;
-    }
+    if (cmd.cmd === "/start") return sendHome(env, userId);
+    if (cmd.cmd === "/help") return showHelp(env, userId);
     if (cmd.cmd === "/newdest") return createDestToken(env, userId);
-    if (cmd.cmd === "/list") return showList(env, userId);
+    if (cmd.cmd === "/list") return showList(env, userId, 0);
+    if (cmd.cmd === "/settings") return showSettings(env, userId);
     if (cmd.cmd === "/follow") return handleFollowInput(env, userId, cmd.args.join(" "));
     if (cmd.cmd === "/cancel") {
       await clearState(env.DB, userId);
-      return sendMenu(env, userId);
+      return sendHome(env, userId);
     }
   }
 
@@ -952,7 +1258,7 @@ async function handlePrivateMessage(env: Env, msg: any) {
 
   if (st?.state === "await_include_keywords") {
     const u = String(st.data?.username || "");
-    const arr = text.split(",").map((x) => x.trim()).filter(Boolean);
+    const arr = text.split(",").map((x) => x.trim()).filter(Boolean).slice(0, 40);
     await env.DB.prepare("UPDATE user_sources SET include_keywords=? WHERE user_id=? AND username=?").bind(JSON.stringify(arr), userId, u).run();
     await clearState(env.DB, userId);
     return showChannelSettings(env, userId, u);
@@ -960,7 +1266,7 @@ async function handlePrivateMessage(env: Env, msg: any) {
 
   if (st?.state === "await_exclude_keywords") {
     const u = String(st.data?.username || "");
-    const arr = text.split(",").map((x) => x.trim()).filter(Boolean);
+    const arr = text.split(",").map((x) => x.trim()).filter(Boolean).slice(0, 40);
     await env.DB.prepare("UPDATE user_sources SET exclude_keywords=? WHERE user_id=? AND username=?").bind(JSON.stringify(arr), userId, u).run();
     await clearState(env.DB, userId);
     return showChannelSettings(env, userId, u);
@@ -969,26 +1275,53 @@ async function handlePrivateMessage(env: Env, msg: any) {
   if (st?.state === "await_digest_hours") {
     const n = Number(text.trim());
     if (!Number.isFinite(n) || n < 1 || n > 24) {
-      await tg(env, "sendMessage", {
-        chat_id: userId,
-        text: t(prefs.lang, "عدد بین ۱ تا ۲۴ بفرست.", "Send a number between 1 and 24."),
-        reply_markup: cancelKeyboard(prefs.lang),
-      });
+      await tg(env, "sendMessage", { chat_id: userId, text: s.invalidNumber, reply_markup: cancelKb(prefs.lang) });
       return;
     }
     await setPrefs(env.DB, userId, { digest_hours: Math.floor(n) });
     await clearState(env.DB, userId);
-    return digestMenu(env, userId);
+    await tg(env, "sendMessage", { chat_id: userId, text: t(prefs.lang, "✅ بازه خلاصه ذخیره شد.", "✅ Digest interval saved.") });
+    return showSettings(env, userId);
   }
 
-  return sendMenu(env, userId);
+  if (st?.state === "await_default_backfill") {
+    const n = Number(text.trim());
+    if (!Number.isFinite(n) || n < 0 || n > 10) {
+      await tg(env, "sendMessage", { chat_id: userId, text: s.invalidNumber, reply_markup: cancelKb(prefs.lang) });
+      return;
+    }
+    await setPrefs(env.DB, userId, { default_backfill_n: Math.floor(n) });
+    await clearState(env.DB, userId);
+    await tg(env, "sendMessage", { chat_id: userId, text: t(prefs.lang, "✅ بک‌فیل پیش‌فرض ذخیره شد.", "✅ Default backfill saved.") });
+    return showSettings(env, userId);
+  }
+
+  if (st?.state === "await_quiet_hours") {
+    const low = text.trim().toLowerCase();
+    if (low === "off") {
+      await setPrefs(env.DB, userId, { quiet_start: -1, quiet_end: -1 });
+      await clearState(env.DB, userId);
+      await tg(env, "sendMessage", { chat_id: userId, text: t(prefs.lang, "✅ ساعت سکوت خاموش شد.", "✅ Quiet hours disabled.") });
+      return showSettings(env, userId);
+    }
+    const parts = low.split(/\s+/);
+    if (parts.length < 2) {
+      await tg(env, "sendMessage", { chat_id: userId, text: s.invalidNumber, reply_markup: cancelKb(prefs.lang) });
+      return;
+    }
+    const qs = clamp(Number(parts[0]), 0, 23);
+    const qe = clamp(Number(parts[1]), 0, 23);
+    await setPrefs(env.DB, userId, { quiet_start: qs, quiet_end: qe });
+    await clearState(env.DB, userId);
+    await tg(env, "sendMessage", { chat_id: userId, text: t(prefs.lang, "✅ ساعت سکوت ذخیره شد.", "✅ Quiet hours saved.") });
+    return showSettings(env, userId);
+  }
+
+  return sendHome(env, userId);
 }
 
-/* ------------------------- D1 lock (prevents overlaps) ------------------------- */
-
+/** ------------------- locks ------------------- */
 async function acquireTickLock(db: D1Database): Promise<boolean> {
-  await db.prepare("CREATE TABLE IF NOT EXISTS locks (name TEXT PRIMARY KEY, acquired_at INTEGER NOT NULL);").run();
-
   const now = nowSec();
   const ins = await db.prepare("INSERT OR IGNORE INTO locks(name, acquired_at) VALUES(?, ?)").bind(LOCK_NAME, now).run();
   if ((ins as any)?.meta?.changes === 1) return true;
@@ -997,13 +1330,9 @@ async function acquireTickLock(db: D1Database): Promise<boolean> {
   const acquiredAt = Number(row?.acquired_at ?? 0);
 
   if (!acquiredAt || now - acquiredAt > LOCK_TTL_SEC) {
-    const upd = await db
-      .prepare("UPDATE locks SET acquired_at=? WHERE name=? AND acquired_at=?")
-      .bind(now, LOCK_NAME, acquiredAt)
-      .run();
+    const upd = await db.prepare("UPDATE locks SET acquired_at=? WHERE name=? AND acquired_at=?").bind(now, LOCK_NAME, acquiredAt).run();
     if ((upd as any)?.meta?.changes === 1) return true;
   }
-
   return false;
 }
 
@@ -1011,29 +1340,49 @@ async function releaseTickLock(db: D1Database) {
   await db.prepare("DELETE FROM locks WHERE name=?").bind(LOCK_NAME).run();
 }
 
-/* ------------------------- Scheduled work (scrape + store + realtime + digest) ------------------------- */
+/** ------------------- tick work ------------------- */
+async function pMapLimit<T, R>(items: T[], limit: number, fn: (x: T) => Promise<R>): Promise<R[]> {
+  const out: R[] = [];
+  let i = 0;
+  const workers = new Array(Math.min(limit, items.length)).fill(0).map(async () => {
+    while (true) {
+      const idx = i++;
+      if (idx >= items.length) break;
+      out[idx] = await fn(items[idx]);
+    }
+  });
+  await Promise.all(workers);
+  return out;
+}
 
 async function runScrapeTick(env: Env) {
-  const followed = await env.DB.prepare("SELECT DISTINCT username FROM user_sources").all<any>();
+  const due = await env.DB
+    .prepare(
+      `SELECT s.username, s.last_post_id, s.check_every_sec, s.fail_count
+       FROM sources s
+       JOIN (SELECT DISTINCT username FROM user_sources) u ON u.username=s.username
+       WHERE s.next_check_at <= ?
+       ORDER BY s.next_check_at ASC
+       LIMIT ?`
+    )
+    .bind(nowSec(), MAX_SOURCES_PER_TICK)
+    .all<any>();
 
-  for (const row of followed.results) {
+  const dueSources = due.results || [];
+
+  await pMapLimit(dueSources, MAX_FETCH_CONCURRENCY, async (row) => {
     const username = String(row.username);
+    const lastSeen = Number(row.last_post_id ?? 0);
+    const curEvery = clamp(Number(row.check_every_sec ?? MIN_POLL_SEC), MIN_POLL_SEC, MAX_POLL_SEC);
+    const failCount = Number(row.fail_count ?? 0);
 
     try {
-      const source = await env.DB.prepare("SELECT last_post_id FROM sources WHERE username=?").bind(username).first<any>();
-      const lastSeen = Number(source?.last_post_id ?? 0);
-
       const html = await fetchTme(username);
       const posts = scrapeTmePreview(username, html);
-      if (!posts.length) continue;
+      if (!posts.length) throw new Error("no posts parsed");
 
       let newPosts = posts.filter((p) => p.postId > lastSeen);
       if (lastSeen === 0 && newPosts.length > FIRST_SYNC_LIMIT) newPosts = newPosts.slice(-FIRST_SYNC_LIMIT);
-
-      if (!newPosts.length) {
-        await env.DB.prepare("UPDATE sources SET updated_at=? WHERE username=?").bind(nowSec(), username).run();
-        continue;
-      }
 
       for (const p of newPosts) {
         await env.DB
@@ -1042,45 +1391,79 @@ async function runScrapeTick(env: Env) {
           .run();
       }
 
-      const subs = await env.DB
-        .prepare(
-          `SELECT us.user_id, d.chat_id AS dest_chat_id, us.paused, us.mode, us.include_keywords, us.exclude_keywords
-           FROM user_sources us
-           JOIN destinations d ON d.user_id = us.user_id
-           WHERE us.username=? AND d.verified=1`
-        )
-        .bind(username)
-        .all<any>();
+      if (newPosts.length) {
+        const subs = await env.DB
+          .prepare(
+            `SELECT us.user_id, d.chat_id AS dest_chat_id, us.paused, us.mode, us.include_keywords, us.exclude_keywords
+             FROM user_sources us
+             JOIN destinations d ON d.user_id = us.user_id
+             WHERE us.username=? AND d.verified=1`
+          )
+          .bind(username)
+          .all<any>();
 
-      for (const post of newPosts) {
-        for (const s of subs.results) {
-          const userId = Number(s.user_id);
-          const destChatId = Number(s.dest_chat_id);
+        for (const post of newPosts) {
+          for (const s of subs.results) {
+            const userId = Number(s.user_id);
+            const destChatId = Number(s.dest_chat_id);
 
-          if (Number(s.paused) === 1) continue;
-          if (String(s.mode) !== "realtime") continue;
+            if (Number(s.paused) === 1) continue;
+            if (String(s.mode) !== "realtime") continue;
 
-          const prefs = await ensurePrefs(env.DB, userId);
-          if (!prefs.realtime_enabled) continue;
+            const prefs = await ensurePrefs(env.DB, userId);
+            if (!prefs.realtime_enabled) continue;
 
-          const include = safeParseKeywords(s.include_keywords);
-          const exclude = safeParseKeywords(s.exclude_keywords);
-          if (!textPassesFilters(post.text || "", include, exclude)) continue;
+            const include = safeParseKeywords(s.include_keywords);
+            const exclude = safeParseKeywords(s.exclude_keywords);
+            if (!textPassesFilters(post.text || "", include, exclude)) continue;
 
-          await deliverRealtime(env, userId, destChatId, username, post, prefs.lang).catch(() => {});
+            await deliverRealtime(env, userId, destChatId, username, post, prefs).catch(() => {});
+          }
         }
       }
 
-      const maxId = newPosts[newPosts.length - 1].postId;
-      await env.DB.prepare("UPDATE sources SET last_post_id=?, updated_at=? WHERE username=?").bind(maxId, nowSec(), username).run();
-    } catch {
-      continue;
+      const maxId = (newPosts.length ? newPosts[newPosts.length - 1].postId : lastSeen) || 0;
+      const nextEvery = newPosts.length ? MIN_POLL_SEC : clamp(Math.round(curEvery * 1.6), MIN_POLL_SEC, MAX_POLL_SEC);
+      const nextAt = nowSec() + nextEvery;
+
+      await env.DB
+        .prepare(
+          `UPDATE sources SET
+             last_post_id=?, updated_at=?, next_check_at=?, check_every_sec=?,
+             fail_count=0, last_error=NULL, last_error_at=0, last_success_at=?
+           WHERE username=?`
+        )
+        .bind(maxId, nowSec(), nextAt, nextEvery, nowSec(), username)
+        .run();
+    } catch (e: any) {
+      const msg = String(e?.message || e);
+      const nextEvery = clamp(Math.round(curEvery * 2), MIN_POLL_SEC, MAX_POLL_SEC);
+      const nextAt = nowSec() + nextEvery;
+
+      await env.DB
+        .prepare(
+          `UPDATE sources SET
+             updated_at=?, next_check_at=?, check_every_sec=?,
+             fail_count=?, last_error=?, last_error_at=?
+           WHERE username=?`
+        )
+        .bind(nowSec(), nextAt, nextEvery, failCount + 1, msg.slice(0, 250), nowSec(), username)
+        .run();
     }
+  });
+
+  // flush quiet-hour queue
+  const queuedUsers = await env.DB.prepare("SELECT DISTINCT user_id FROM queued_realtime").all<any>();
+  for (const r of queuedUsers.results || []) {
+    const userId = Number(r.user_id);
+    const prefs = await ensurePrefs(env.DB, userId);
+    await flushQueuedRealtime(env, userId, prefs).catch(() => {});
   }
 
-  const usersWithDigest = await env.DB.prepare("SELECT DISTINCT user_id FROM user_sources WHERE mode='digest' AND paused=0").all<any>();
-  for (const r of usersWithDigest.results) {
-    await sendDigestForUser(env, Number(r.user_id), false);
+  // digest due users
+  const digestUsers = await env.DB.prepare("SELECT DISTINCT user_id FROM user_sources WHERE mode='digest' AND paused=0").all<any>();
+  for (const r of digestUsers.results || []) {
+    await sendDigestForUser(env, Number(r.user_id), false).catch(() => {});
   }
 }
 
@@ -1094,9 +1477,10 @@ async function runScrapeTickLocked(env: Env) {
   }
 }
 
-/* ------------------------- Process updates ------------------------- */
-
+/** ------------------- updates router ------------------- */
 async function processUpdate(env: Env, update: TgUpdate) {
+  await ensureDbUpgrades(env.DB);
+
   if (update.callback_query) {
     await handleCallback(env, update.callback_query);
     return;
@@ -1111,8 +1495,7 @@ async function processUpdate(env: Env, update: TgUpdate) {
   }
 }
 
-/* ------------------------- Durable Object Scheduler (5s) ------------------------- */
-
+/** ------------------- durable object ticker ------------------- */
 async function ensureTickerStarted(env: Env) {
   const id = env.TICKER.idFromName("global");
   const stub = env.TICKER.get(id);
@@ -1133,7 +1516,7 @@ export class Ticker {
 
     if (url.pathname === "/start") {
       const cur = await this.state.storage.getAlarm();
-      if (!cur) await this.state.storage.setAlarm(Date.now() + 1000); // start quickly
+      if (!cur) await this.state.storage.setAlarm(Date.now() + 1000);
       return new Response("started");
     }
 
@@ -1151,27 +1534,37 @@ export class Ticker {
   }
 
   async alarm() {
-    // Run the work
     try {
+      await ensureDbUpgrades(this.env.DB);
       await runScrapeTickLocked(this.env);
     } catch (e) {
       console.log("ticker alarm error:", String(e));
     } finally {
-      // Schedule next tick
       await this.state.storage.setAlarm(Date.now() + TICK_MS);
     }
   }
 }
 
-/* ------------------------- Routes ------------------------- */
+/** ------------------- admin auth ------------------- */
+function getAdminKey(env: Env) {
+  return env.ADMIN_KEY || env.WEBHOOK_SECRET || "";
+}
+function checkAdmin(c: any) {
+  const expected = getAdminKey(c.env);
+  if (!expected) return false;
+  const auth = c.req.header("Authorization") || "";
+  const xkey = c.req.header("X-Admin-Key") || "";
+  if (auth.startsWith("Bearer ")) return auth.slice(7) === expected;
+  return xkey === expected;
+}
 
+/** ------------------- routes ------------------- */
 app.get("/", (c) => c.text("ok"));
 
 app.post("/telegram", async (c) => {
   const secret = c.req.header("X-Telegram-Bot-Api-Secret-Token");
-  if (c.env.WEBHOOK_SECRET && secret && secret !== c.env.WEBHOOK_SECRET) return c.text("forbidden", 403);
+  if (c.env.WEBHOOK_SECRET && (!secret || secret !== c.env.WEBHOOK_SECRET)) return c.text("forbidden", 403);
 
-  // Make sure our 5s ticker is running (best effort)
   c.executionCtx.waitUntil(ensureTickerStarted(c.env));
 
   const update = await c.req.json<TgUpdate>();
@@ -1179,25 +1572,21 @@ app.post("/telegram", async (c) => {
   return c.json({ ok: true });
 });
 
-// Manual scrape (protected)
 app.post("/admin/run-scrape", async (c) => {
-  const key = c.req.query("key");
-  if (key !== c.env.WEBHOOK_SECRET) return c.text("forbidden", 403);
+  if (!checkAdmin(c)) return c.text("forbidden", 403);
+  await ensureDbUpgrades(c.env.DB);
   await runScrapeTickLocked(c.env);
   return c.json({ ok: true });
 });
 
-// Start/Stop/Status ticker (protected)
 app.post("/admin/ticker/start", async (c) => {
-  const key = c.req.query("key");
-  if (key !== c.env.WEBHOOK_SECRET) return c.text("forbidden", 403);
+  if (!checkAdmin(c)) return c.text("forbidden", 403);
   await ensureTickerStarted(c.env);
   return c.json({ ok: true });
 });
 
 app.post("/admin/ticker/stop", async (c) => {
-  const key = c.req.query("key");
-  if (key !== c.env.WEBHOOK_SECRET) return c.text("forbidden", 403);
+  if (!checkAdmin(c)) return c.text("forbidden", 403);
   const id = c.env.TICKER.idFromName("global");
   const stub = c.env.TICKER.get(id);
   await stub.fetch("https://ticker/stop", { method: "POST" });
@@ -1205,8 +1594,7 @@ app.post("/admin/ticker/stop", async (c) => {
 });
 
 app.get("/admin/ticker/status", async (c) => {
-  const key = c.req.query("key");
-  if (key !== c.env.WEBHOOK_SECRET) return c.text("forbidden", 403);
+  if (!checkAdmin(c)) return c.text("forbidden", 403);
   const id = c.env.TICKER.idFromName("global");
   const stub = c.env.TICKER.get(id);
   const res = await stub.fetch("https://ticker/status");
@@ -1216,7 +1604,7 @@ app.get("/admin/ticker/status", async (c) => {
 export default {
   fetch: app.fetch,
 
-  // Cron can't do 5s, but it can "kick" the ticker to ensure it starts within a minute after deploy.
+  // cron only “kicks” the ticker
   scheduled: async (_controller: ScheduledController, env: Env, ctx: ExecutionContext) => {
     ctx.waitUntil(ensureTickerStarted(env));
   },
