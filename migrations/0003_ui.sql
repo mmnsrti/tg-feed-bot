@@ -1,0 +1,1 @@
+ALTER TABLE user_prefs ADD COLUMN advanced_enabled INTEGER NOT NULL DEFAULT 0;
