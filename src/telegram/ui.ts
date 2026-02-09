@@ -8,7 +8,10 @@ export function S(lang: Lang) {
   const L = (fa: string, en: string) => (lang === "fa" ? fa : en);
   return {
     title: L("📡 فید کانال‌ها", "📡 Channel Feeds"),
-    homeHint: L("از دکمه‌ها استفاده کن 👇", "Use the buttons below 👇"),
+    homeHint: L(
+      "از دکمه‌ها استفاده کن 👇\nاگر اولین باره، اول «کانال مقصد» را تنظیم کن.",
+      "Use the buttons below 👇\nFirst time here? Set the destination channel."
+    ),
 
     destinationLabel: L("مقصد", "Destination"),
     realtimeLabel: L("ریِل‌تایم", "Realtime"),
@@ -51,9 +54,18 @@ export function S(lang: Lang) {
     openProfile: L("🖼 عکس پروفایل", "🖼 Profile photo"),
     noText: L("(بدون متن)", "(no text)"),
 
-    needDestFirst: L("⚠️ اول کانال مقصد را تنظیم کن.", "⚠️ Set destination first."),
-    sendUsername: L("نام کاربری یا لینک کانال عمومی را بفرست:\nمثلا @khabarfuri", "Send a public channel username/link:\nExample: @khabarfuri"),
-    invalidFormat: L("فرمت اشتباه است. مثل @name بفرست.", "Invalid format. Send @name."),
+    needDestFirst: L(
+      "⚠️ اول کانال مقصد را تنظیم کن تا بدانم پست‌ها را کجا بفرستم.",
+      "⚠️ Set the destination first so I know where to send posts."
+    ),
+    sendUsername: L(
+      "نام کاربری یا لینک کانال عمومی را بفرست (کانال خصوصی پشتیبانی نمی‌شود):\nمثال: @khabarfuri یا https://t.me/khabarfuri",
+      "Send a public channel username or link (private channels aren't supported):\nExample: @khabarfuri or https://t.me/khabarfuri"
+    ),
+    invalidFormat: L(
+      "فرمت اشتباه است. مثل @name یا لینک https://t.me/name بفرست.",
+      "Invalid format. Send @name or a https://t.me/name link."
+    ),
     fetchFailed: L("الان امکان دریافت ندارم. چند دقیقه بعد دوباره امتحان کن.", "Couldn’t reach it right now. Try again in a minute."),
     couldntRead: (u: string) => L(`از @${u} چیزی نتونستم بخونم. عمومی هست؟`, `Couldn’t read @${u}. Is it public?`),
 
@@ -66,8 +78,17 @@ export function S(lang: Lang) {
         "",
         "✅ این ربات پست‌های کانال‌های عمومی را به کانال مقصد شما می‌فرستد.",
         "",
+        "🚀 شروع سریع:",
+        "1) کانال مقصد بساز و ربات را ادمین کن",
+        "2) از «افزودن کانال» کانال‌های عمومی را اضافه کن",
+        "3) در تنظیمات، ریِل‌تایم یا خلاصه را تنظیم کن",
+        "",
         "⚡ ریِل‌تایم: هر پست جدید سریع ارسال می‌شود.",
         "🧾 خلاصه: هر X ساعت یک پیام خلاصه ارسال می‌شود.",
+        "🌙 ساعت سکوت: در بازه مشخص پیام ارسال نمی‌شود.",
+        "",
+        "🔎 فیلترها: کلمات شامل/حذف را برای هر کانال تعیین کن.",
+        "📌 بک‌فیل: هنگام Follow چند پست آخر هم ارسال می‌شود.",
         "",
         "📌 پست‌ها داخل تلگرام خوانا هستند و لینک اصلی هم برای پیش‌نمایش می‌آید.",
       ].join("\n"),
@@ -76,8 +97,17 @@ export function S(lang: Lang) {
         "",
         "✅ This bot forwards public channel posts into your destination channel.",
         "",
+        "🚀 Quick start:",
+        "1) Create a destination channel and add the bot as admin",
+        "2) Use Add Channel to follow public channels",
+        "3) In Settings, choose Realtime or Digest",
+        "",
         "⚡ Realtime: each new post is sent quickly.",
         "🧾 Digest: a summary is sent every X hours.",
+        "🌙 Quiet Hours: no posts are sent during the selected window.",
+        "",
+        "🔎 Filters: set include/exclude keywords per channel.",
+        "📌 Backfill: send the last N posts when you follow.",
         "",
         "📌 Posts are readable inside Telegram and still include the original link preview.",
       ].join("\n")
@@ -85,15 +115,24 @@ export function S(lang: Lang) {
 
     destTitle: L("🎯 تنظیم کانال مقصد", "🎯 Set Destination"),
     destSteps: L(
-      "1) یک کانال مقصد بساز\n2) ربات را ادمین کن\n3) این خط را در کانال بفرست:",
-      "1) Create a destination channel\n2) Add the bot as admin\n3) Post this line in the channel:"
+      "1) یک کانال مقصد بساز (عمومی یا خصوصی)\n2) ربات را ادمین کن و اجازه ارسال بده\n3) این خط را در کانال بفرست:",
+      "1) Create a destination channel (public or private)\n2) Add the bot as admin and allow posting\n3) Post this line in the channel:"
     ),
-    copyHint: L("برای کپی، روی متن کادر لمس طولانی کن.", "Long-press the code block to copy."),
+    copyHint: L(
+      "برای کپی، روی متن کادر لمس طولانی کن و بعد در کانال مقصد بفرست.",
+      "Long-press the code block to copy, then paste it in the destination channel."
+    ),
 
-    digestAskHours: L("عدد بازه خلاصه را بفرست (۱ تا ۲۴).", "Send digest interval in hours (1..24)."),
+    digestAskHours: L("عدد بازه خلاصه را بفرست (۱ تا ۲۴). مثلا 6", "Send digest interval in hours (1..24). Example: 6"),
     invalidNumber: L("عدد معتبر نیست.", "Invalid number."),
-    quietAsk: L("برای تنظیم ساعت سکوت (UTC):\nمثال: 1 8\nبرای خاموش کردن: off", "Set quiet hours (UTC):\nExample: 1 8\nDisable: off"),
-    backfillAsk: L("عدد بک‌فیل پیش‌فرض را بفرست (۰ تا ۱۰).", "Send default backfill (0..10)."),
+    quietAsk: L(
+      "برای تنظیم ساعت سکوت (UTC):\nفرمت: شروع پایان\nمثال: 1 8\nبرای خاموش کردن: off",
+      "Set quiet hours (UTC):\nFormat: start end\nExample: 1 8\nDisable: off"
+    ),
+    backfillAsk: L(
+      "عدد بک‌فیل پیش‌فرض را بفرست (۰ تا ۱۰). ۰ یعنی ارسال نکن.",
+      "Send default backfill (0..10). 0 means don't send old posts."
+    ),
     digestSaved: L("✅ بازه خلاصه ذخیره شد.", "✅ Digest interval saved."),
     backfillSaved: L("✅ بک‌فیل پیش‌فرض ذخیره شد.", "✅ Default backfill saved."),
     quietSaved: L("✅ ساعت سکوت ذخیره شد.", "✅ Quiet hours saved."),
@@ -126,19 +165,27 @@ export function S(lang: Lang) {
 
     testOk: L("✅ تست ارسال انجام شد.", "✅ Delivery test succeeded."),
 
-    labelPrompt: (u: string) => L(`برچسب جدید برای @${u} را بفرست (یا "-" برای پاک‌کردن).`, `Send a new label for @${u} (or "-" to clear).`),
+    labelPrompt: (u: string) =>
+      L(
+        `برچسب جدید برای @${u} را بفرست (در بالای پست‌ها نمایش داده می‌شود) یا "-" برای پاک‌کردن.`,
+        `Send a new label for @${u} (shown on post headers), or "-" to clear.`
+      ),
     labelSaved: L("✅ برچسب ذخیره شد.", "✅ Label saved."),
     labelCleared: L("✅ برچسب پاک شد.", "✅ Label cleared."),
     labelTooLong: L("برچسب خیلی طولانی است. حداکثر ۳۲ کاراکتر.", "Label is too long. Max 32 characters."),
 
     listEmpty: L("هیچ کانالی دنبال نمی‌کنی.", "You aren’t following any channels."),
-    listHint: L("برای مدیریت، روی دکمه هر کانال بزن.", "Tap a channel button to manage."),
-    listSearchHint: L("برای جست‌وجو، @name را تایپ کن.", "Type @name to search."),
+    listHint: L("برای مدیریت، روی دکمه هر کانال بزن یا جست‌وجو کن.", "Tap a channel button to manage, or search by @name."),
+    listSearchHint: L("برای جست‌وجو، @name یا لینک t.me را تایپ کن.", "Type @name or a t.me link to search."),
     listNoMatches: L("چیزی پیدا نشد.", "No matches found."),
     listMatchesTitle: L("نتایج جست‌وجو", "Search results"),
     channelNotFound: L("کانال پیدا نشد.", "Channel not found."),
     filtersTitle: (u: string) => L(`🔎 فیلترهای @${u}`, `🔎 Filters for @${u}`),
-    backfillMenu: (u: string) => L(`📌 بک‌فیل @${u}\nچند پست آخر هنگام Follow ارسال شود؟`, `📌 Backfill @${u}\nHow many last posts on follow?`),
+    backfillMenu: (u: string) =>
+      L(
+        `📌 بک‌فیل @${u}\nچند پست آخر هنگام Follow ارسال شود؟ (۰ یعنی هیچ)`,
+        `📌 Backfill @${u}\nHow many last posts on follow? (0 = none)`
+      ),
 
     filtersCount: (n: number) => L(`🔎 ${n}`, `🔎 ${n}`),
     lastSeenLabel: L("آخرین", "Last"),
