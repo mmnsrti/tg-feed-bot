@@ -161,20 +161,9 @@ function oneLine(s: string) {
   return (s || "").replace(/\s+/g, " ").trim();
 }
 
-function formatTimeUtc(timeSec?: number) {
-  if (!timeSec || !Number.isFinite(timeSec)) return null;
-  const d = new Date(timeSec * 1000);
-  const hh = String(d.getUTCHours()).padStart(2, "0");
-  const mm = String(d.getUTCMinutes()).padStart(2, "0");
-  return `${hh}:${mm}`;
-}
-
-function metaLine(lang: Lang, username: string, timeSec?: number) {
+function metaLine(lang: Lang, username: string) {
   const s = S(lang);
-  const base = `${s.via} @${escapeHtml(username)}`;
-  const time = formatTimeUtc(timeSec);
-  if (time) return `${base} • 🕒 ${time}`;
-  return base;
+  return `${s.via} @${escapeHtml(username)}`;
 }
 
 function badgeText(lang: Lang, label?: string | null) {
@@ -217,7 +206,7 @@ export function renderCompactPost(
   const snippetSource = raw || s.noText;
   const snippet = truncateText(oneLine(snippetSource), 160);
   const safeSnippet = escapeHtml(snippet);
-  const meta = metaLine(lang, channelUsername, timeSec);
+  const meta = metaLine(lang, channelUsername);
 
   const lines = [header, safeSnippet];
   if (meta) lines.push(meta);
@@ -249,7 +238,7 @@ export function renderRichPost(
     if (full && full !== short) fullBlock = `<blockquote expandable>${escapeHtml(full)}</blockquote>`;
   }
 
-  const meta = metaLine(lang, channelUsername, timeSec);
+  const meta = metaLine(lang, channelUsername);
 
   const parts = [header, shortBlock];
   if (fullBlock) parts.push(fullBlock);
