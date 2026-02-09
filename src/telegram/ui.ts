@@ -184,15 +184,11 @@ function headerLine(lang: Lang, username: string, label?: string | null) {
 
 type RenderedMessage = { text: string; reply_markup: any };
 
-function profilePicUrl(username: string) {
-  return `https://t.me/i/userpic/320/${username}.jpg`;
-}
 
-function footerLinks(lang: Lang, postLink: string, username: string) {
+function footerLinks(lang: Lang, postLink: string) {
   const s = S(lang);
   const a = `<a href="${postLink}">${escapeHtml(s.linkOriginal)}</a>`;
-  const b = `<a href="${profilePicUrl(username)}">${escapeHtml(s.linkProfile)}</a>`;
-  return `${a} • ${b}`;
+  return `${a}`;
 }
 
 export function postButtons(lang: Lang, username: string, link: string) {
@@ -202,9 +198,7 @@ export function postButtons(lang: Lang, username: string, link: string) {
       [
         { text: s.openOriginal, url: link },
         { text: s.openChannel, url: `https://t.me/${username}` },
-      ],
-      [{ text: s.openProfile, url: profilePicUrl(username) }],
-    ],
+      ], ],
   };
 }
 
@@ -215,7 +209,6 @@ export function renderCompactPost(
   channelLabel: string | null,
   postText: string,
   postLink: string,
-  timeSec?: number,
   opts?: { includeHeader?: boolean }
 ): RenderedMessage {
   const s = S(lang);
@@ -227,7 +220,7 @@ export function renderCompactPost(
 
   const includeHeader = opts?.includeHeader !== false;
   const lines = includeHeader ? [header, safeSnippet] : [safeSnippet];
-  lines.push(footerLinks(lang, postLink, channelUsername));
+  lines.push(footerLinks(lang, postLink));
 
   return { text: lines.join("\n"), reply_markup: postButtons(lang, channelUsername, postLink) };
 }
@@ -239,7 +232,6 @@ export function renderRichPost(
   channelLabel: string | null,
   postText: string,
   postLink: string,
-  timeSec?: number,
   opts?: { includeHeader?: boolean; fullTextStyle?: FullTextStyle }
 ): RenderedMessage {
   const s = S(lang);
@@ -266,7 +258,7 @@ export function renderRichPost(
 
   const parts = includeHeader ? [header, shortBlock] : [shortBlock];
   if (fullBlock) parts.push(fullBlock);
-  parts.push(footerLinks(lang, postLink, channelUsername));
+  parts.push(footerLinks(lang, postLink));
 
   return { text: parts.join("\n\n"), reply_markup: postButtons(lang, channelUsername, postLink) };
 }
