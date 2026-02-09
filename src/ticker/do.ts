@@ -1,4 +1,4 @@
-﻿import { Env, MediaItem, ScrapedPost, UserPrefs } from "../types";
+import { Env, MediaItem, ScrapedPost, UserPrefs } from "../types";
 import { tg, TelegramError } from "../telegram/client";
 import { renderDestinationPost, t } from "../telegram/ui";
 import { clamp, ensurePrefs, getDestination, markDestinationBad, nowSec, setPrefs } from "../db/repo";
@@ -14,7 +14,6 @@ const MAX_SOURCES_PER_TICK = 30;
 
 const LOCK_NAME = "scrape_tick";
 const LOCK_TTL_SEC = 25;
-const PHOTO_TTL_SEC = 6 * 3600;
 
 /** ------------------- filters ------------------- */
 function safeParseKeywords(raw: any): string[] {
@@ -80,9 +79,9 @@ function safeParseMediaJson(raw: any): MediaItem[] {
 
 async function sendFeedPost(env: Env, destChatId: number, prefs: UserPrefs, username: string, label: string | null, post: ScrapedPost) {
   const link = post.link || `https://t.me/${username}/${post.postId}`;
-  const rendered = renderDestinationPost(prefs.post_style, prefs.lang, username, label, post.text, link, nowSec());
-
-  await sendSourceAvatar(env, destChatId, username);
+  const rendered = renderDestinationPost(prefs.post_style, prefs.lang, username, label, post.text, link, nowSec(), {
+    fullTextStyle: prefs.full_text_style,
+  });
 
   await tg(env, "sendMessage", {
     chat_id: destChatId,
@@ -90,94 +89,6 @@ async function sendFeedPost(env: Env, destChatId: number, prefs: UserPrefs, user
     parse_mode: "HTML",
     reply_markup: rendered.reply_markup,
   });
-}
-
-async function getSourcePhotoCache(env: Env, username: string) {
-  const row = await env.DB
-    .prepare("SELECT chat_photo_file_id, chat_photo_updated_at FROM sources WHERE username=?")
-    .bind(username)
-    .first<any>();
-  return {
-    fileId: String(row?.chat_photo_file_id || ""),
-    updatedAt: Number(row?.chat_photo_updated_at ?? 0),
-  };
-}
-
-async function updateSourcePhotoCache(env: Env, username: string, fileId: string | null) {
-  await env.DB
-    .prepare("UPDATE sources SET chat_photo_file_id=?, chat_photo_updated_at=? WHERE username=?")
-    .bind(fileId || null, nowSec(), username)
-    .run();
-}
-
-async function fetchSourcePhotoFileId(env: Env, username: string): Promise<string | null> {
-  try {
-    const chat = await tg(env, "getChat", { chat_id: `@${username}` });
-    const fileId = String(chat?.photo?.big_file_id || chat?.photo?.small_file_id || "");
-    await updateSourcePhotoCache(env, username, fileId || null);
-    return fileId || null;
-  } catch {
-    await updateSourcePhotoCache(env, username, null);
-    return null;
-  }
-}
-
-function userpicUrl(username: string) {
-  return `https://t.me/i/userpic/320/${username}.jpg`;
-}
-
-async function sendSourceAvatar(env: Env, destChatId: number, username: string) {
-  try {
-    const cache = await getSourcePhotoCache(env, username);
-    const age = nowSec() - cache.updatedAt;
-
-    const trySendFileId = async (fileId: string) => {
-      try {
-        await tg(env, "sendPhoto", { chat_id: destChatId, photo: fileId });
-        return true;
-      } catch (e: any) {
-        if (e instanceof TelegramError && e.code === 400) return false;
-        throw e;
-      }
-    };
-
-    const trySendFilePath = async (fileId: string) => {
-      try {
-        const file = await tg(env, "getFile", { file_id: fileId });
-        const path = String(file?.file_path || "");
-        if (!path) return false;
-        const url = `https://api.telegram.org/file/bot${env.BOT_TOKEN}/${path}`;
-        await tg(env, "sendPhoto", { chat_id: destChatId, photo: url });
-        return true;
-      } catch (e: any) {
-        if (e instanceof TelegramError && e.code === 400) return false;
-        throw e;
-      }
-    };
-
-    if (cache.fileId) {
-      if (await trySendFileId(cache.fileId)) return;
-      if (await trySendFilePath(cache.fileId)) return;
-      await updateSourcePhotoCache(env, username, null);
-    }
-
-    const canRefresh = age >= PHOTO_TTL_SEC || cache.updatedAt === 0;
-    if (canRefresh) {
-      const fileId = await fetchSourcePhotoFileId(env, username);
-      if (fileId) {
-        if (await trySendFileId(fileId)) return;
-        if (await trySendFilePath(fileId)) return;
-        await updateSourcePhotoCache(env, username, null);
-      }
-    }
-
-    try {
-      await tg(env, "sendPhoto", { chat_id: destChatId, photo: userpicUrl(username) });
-      await updateSourcePhotoCache(env, username, null);
-    } catch {}
-  } catch {
-    return;
-  }
 }
 
 export async function deliverRealtime(

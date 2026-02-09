@@ -67,7 +67,8 @@ CREATE TABLE IF NOT EXISTS user_prefs (
   default_backfill_n INTEGER NOT NULL DEFAULT 3,
   quiet_start INTEGER NOT NULL DEFAULT -1,
   quiet_end INTEGER NOT NULL DEFAULT -1,
-  post_style TEXT NOT NULL DEFAULT 'rich'
+  post_style TEXT NOT NULL DEFAULT 'rich',
+  full_text_style TEXT NOT NULL DEFAULT 'quote'
 );
 
 -- scraped cache for digest mode
