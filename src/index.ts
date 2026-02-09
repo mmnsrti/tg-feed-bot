@@ -13,11 +13,14 @@ type Env = {
 type TgUpdate = any;
 type Lang = "fa" | "en";
 
+type MediaKind = "photo" | "video" | "document";
+type MediaItem = { kind: MediaKind; url: string };
+
 type ScrapedPost = {
   postId: number;
   text: string;
   link: string;
-  photos: string[];
+  media: MediaItem[];
 };
 
 const app = new Hono<{ Bindings: Env }>();
@@ -50,7 +53,13 @@ function utcHourNow(): number {
   return new Date().getUTCHours();
 }
 
-/** ------------------- i18n (single-language) ------------------- */
+function truncate(s: string, max: number) {
+  const t = (s || "").trim();
+  if (t.length <= max) return t;
+  return t.slice(0, Math.max(0, max - 1)) + "…";
+}
+
+/** ------------------- i18n ------------------- */
 function t(lang: Lang, fa: string, en: string) {
   return lang === "fa" ? fa : en;
 }
@@ -80,6 +89,7 @@ function S(lang: Lang) {
     realtimeOff: t(lang, "خاموش ❌", "OFF ❌"),
 
     openOriginal: t(lang, "🔗 پست اصلی", "🔗 Original post"),
+    openChannel: t(lang, "📣 کانال", "📣 Channel"),
     noText: t(lang, "(بدون متن)", "(no text)"),
 
     needDestFirst: t(lang, "⚠️ اول کانال مقصد را تنظیم کن.", "⚠️ Set destination first."),
@@ -229,52 +239,57 @@ function escapeHtml(s: string) {
 
 /** ------------------- DB auto-upgrade (safe) ------------------- */
 async function ensureDbUpgrades(db: D1Database) {
-  // meta_kv stores schema version
   await db.prepare("CREATE TABLE IF NOT EXISTS meta_kv (key TEXT PRIMARY KEY, value TEXT NOT NULL)").run();
 
   const row = await db.prepare("SELECT value FROM meta_kv WHERE key='schema_v'").first<any>();
   const v = Number(row?.value ?? 0);
-  if (v >= 1) return;
+  if (v >= 2) return;
 
-  // Create extra tables (if missing)
-  await db
-    .prepare(
-      `CREATE TABLE IF NOT EXISTS queued_realtime(
-        user_id INTEGER NOT NULL,
-        username TEXT NOT NULL,
-        post_id INTEGER NOT NULL,
-        queued_at INTEGER NOT NULL,
-        PRIMARY KEY (user_id, username, post_id)
-      )`
-    )
-    .run();
-  await db.prepare("CREATE INDEX IF NOT EXISTS idx_queued_realtime_user_time ON queued_realtime(user_id, queued_at)").run();
+  // v1 changes
+  if (v < 1) {
+    await db
+      .prepare(
+        `CREATE TABLE IF NOT EXISTS queued_realtime(
+          user_id INTEGER NOT NULL,
+          username TEXT NOT NULL,
+          post_id INTEGER NOT NULL,
+          queued_at INTEGER NOT NULL,
+          PRIMARY KEY (user_id, username, post_id)
+        )`
+      )
+      .run();
+    await db.prepare("CREATE INDEX IF NOT EXISTS idx_queued_realtime_user_time ON queued_realtime(user_id, queued_at)").run();
 
-  // Add columns (ignore failures if already exist)
-  const alters = [
-    "ALTER TABLE sources ADD COLUMN next_check_at INTEGER NOT NULL DEFAULT 0",
-    "ALTER TABLE sources ADD COLUMN check_every_sec INTEGER NOT NULL DEFAULT 5",
-    "ALTER TABLE sources ADD COLUMN fail_count INTEGER NOT NULL DEFAULT 0",
-    "ALTER TABLE sources ADD COLUMN last_error TEXT",
-    "ALTER TABLE sources ADD COLUMN last_error_at INTEGER NOT NULL DEFAULT 0",
-    "ALTER TABLE sources ADD COLUMN last_success_at INTEGER NOT NULL DEFAULT 0",
+    const altersV1 = [
+      "ALTER TABLE sources ADD COLUMN next_check_at INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE sources ADD COLUMN check_every_sec INTEGER NOT NULL DEFAULT 5",
+      "ALTER TABLE sources ADD COLUMN fail_count INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE sources ADD COLUMN last_error TEXT",
+      "ALTER TABLE sources ADD COLUMN last_error_at INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE sources ADD COLUMN last_success_at INTEGER NOT NULL DEFAULT 0",
 
-    "ALTER TABLE user_sources ADD COLUMN backfill_n INTEGER NOT NULL DEFAULT 3",
+      "ALTER TABLE user_sources ADD COLUMN backfill_n INTEGER NOT NULL DEFAULT 3",
 
-    "ALTER TABLE user_prefs ADD COLUMN default_backfill_n INTEGER NOT NULL DEFAULT 3",
-    "ALTER TABLE user_prefs ADD COLUMN quiet_start INTEGER NOT NULL DEFAULT -1",
-    "ALTER TABLE user_prefs ADD COLUMN quiet_end INTEGER NOT NULL DEFAULT -1",
-  ];
+      "ALTER TABLE user_prefs ADD COLUMN default_backfill_n INTEGER NOT NULL DEFAULT 3",
+      "ALTER TABLE user_prefs ADD COLUMN quiet_start INTEGER NOT NULL DEFAULT -1",
+      "ALTER TABLE user_prefs ADD COLUMN quiet_end INTEGER NOT NULL DEFAULT -1",
+    ];
 
-  for (const q of alters) {
-    try {
-      await db.prepare(q).run();
-    } catch {
-      // already exists
+    for (const q of altersV1) {
+      try {
+        await db.prepare(q).run();
+      } catch {}
     }
   }
 
-  await db.prepare("INSERT OR REPLACE INTO meta_kv(key, value) VALUES('schema_v', '1')").run();
+  // v2: media_json (kept for storage, even though we now only link-preview)
+  if (v < 2) {
+    try {
+      await db.prepare("ALTER TABLE scraped_posts ADD COLUMN media_json TEXT NOT NULL DEFAULT '[]'").run();
+    } catch {}
+  }
+
+  await db.prepare("INSERT OR REPLACE INTO meta_kv(key, value) VALUES('schema_v', '2')").run();
 }
 
 /** ------------------- DB helpers ------------------- */
@@ -287,7 +302,6 @@ async function getDestination(db: D1Database, userId: number) {
 }
 
 async function ensurePrefs(db: D1Database, userId: number) {
-  // minimal defaults
   await db
     .prepare(
       `INSERT OR IGNORE INTO user_prefs(
@@ -384,9 +398,7 @@ async function sendOrEdit(env: Env, opts: { chat_id: number; text: string; reply
         parse_mode: opts.parse_mode,
         disable_web_page_preview: opts.disable_web_page_preview,
       });
-    } catch {
-      // fall through
-    }
+    } catch {}
   }
   return tg(env, "sendMessage", {
     chat_id: opts.chat_id,
@@ -507,22 +519,76 @@ function stripHtml(html: string) {
   return decodeHtmlEntities(noTags).replace(/\n{3,}/g, "\n\n").trim();
 }
 
-function extractPhotoUrls(htmlSlice: string): string[] {
-  const out: string[] = [];
-  const re1 = /background-image\s*:\s*url\(['"]([^'"]+)['"]\)/gi;
+function normalizeUrl(u: string) {
+  if (!u) return "";
+  if (u.startsWith("//")) return `https:${u}`;
+  return u;
+}
+
+// ✅ prevent "emoji sent as photos"
+function isEmojiAssetUrl(u: string) {
+  const x = (u || "").toLowerCase();
+  if (!x) return false;
+  return (
+    x.includes("/emoji/") ||
+    x.includes("telegram.org/img/emoji") ||
+    x.includes("twemoji") ||
+    x.includes("emoji.png") ||
+    x.includes("emoji.webp") ||
+    x.includes("emoji.svg")
+  );
+}
+
+function extractMedia(htmlSlice: string): MediaItem[] {
+  const photos: string[] = [];
+  const videos: string[] = [];
+  const docs: string[] = [];
+
+  // Photos (but ignore emoji assets)
+  const reBg = /background-image\s*:\s*url\(['"]([^'"]+)['"]\)/gi;
   let m: RegExpExecArray | null;
-  while ((m = re1.exec(htmlSlice)) !== null) out.push(m[1]);
-
-  const re2 = /<img[^>]+src="([^"]+)"/gi;
-  while ((m = re2.exec(htmlSlice)) !== null) out.push(m[1]);
-
-  const uniq = new Set<string>();
-  for (const u of out) {
-    if (!u) continue;
-    const norm = u.startsWith("//") ? `https:${u}` : u;
-    uniq.add(norm);
+  while ((m = reBg.exec(htmlSlice)) !== null) {
+    const u = normalizeUrl(m[1]);
+    if (!isEmojiAssetUrl(u)) photos.push(u);
   }
-  return [...uniq].slice(0, 10);
+
+  const reImg = /<img[^>]+src="([^"]+)"/gi;
+  while ((m = reImg.exec(htmlSlice)) !== null) {
+    const u = normalizeUrl(m[1]);
+    if (!isEmojiAssetUrl(u)) photos.push(u);
+  }
+
+  // Videos (best-effort)
+  const reDataVideo = /data-video="([^"]+)"/gi;
+  while ((m = reDataVideo.exec(htmlSlice)) !== null) videos.push(normalizeUrl(m[1]));
+
+  const reVideoSrc = /<(?:video|source)[^>]+src="([^"]+)"/gi;
+  while ((m = reVideoSrc.exec(htmlSlice)) !== null) {
+    const u = normalizeUrl(m[1]);
+    if (/\.mp4(\?|$)/i.test(u) || /video/i.test(u)) videos.push(u);
+  }
+
+  // Documents (best-effort)
+  const reDoc = /href="(https?:\/\/cdn\d+\.telesco\.pe\/file\/[^"]+)"/gi;
+  while ((m = reDoc.exec(htmlSlice)) !== null) {
+    const u = normalizeUrl(m[1]);
+    if (/\.(jpg|jpeg|png|webp|gif)(\?|$)/i.test(u)) continue;
+    if (/\.mp4(\?|$)/i.test(u)) continue;
+    docs.push(u);
+  }
+
+  const uniq = (arr: string[]) => {
+    const s = new Set<string>();
+    for (const x of arr) if (x) s.add(x);
+    return [...s];
+  };
+
+  const out: MediaItem[] = [];
+  for (const u of uniq(photos)) out.push({ kind: "photo", url: u });
+  for (const u of uniq(videos)) out.push({ kind: "video", url: u });
+  for (const u of uniq(docs)) out.push({ kind: "document", url: u });
+
+  return out.slice(0, 10);
 }
 
 async function fetchTme(username: string): Promise<string> {
@@ -573,9 +639,9 @@ function scrapeTmePreview(username: string, html: string): ScrapedPost[] {
     const raw = textMatch ? textMatch[1] : "";
     const text = raw ? stripHtml(raw) : "";
 
-    const photos = extractPhotoUrls(slice);
+    const media = extractMedia(slice);
 
-    posts.push({ postId, text, photos, link: `https://t.me/${username}/${postId}` });
+    posts.push({ postId, text, media, link: `https://t.me/${username}/${postId}` });
   }
 
   const uniq = new Map<number, ScrapedPost>();
@@ -583,7 +649,7 @@ function scrapeTmePreview(username: string, html: string): ScrapedPost[] {
   return [...uniq.values()].sort((a, b) => a.postId - b.postId);
 }
 
-/** ------------------- simple include/exclude filters ------------------- */
+/** ------------------- filters ------------------- */
 function safeParseKeywords(raw: any): string[] {
   try {
     if (!raw) return [];
@@ -623,57 +689,54 @@ function isQuietNow(prefs: { quiet_start: number; quiet_end: number }) {
   return h >= qs || h < qe;
 }
 
-/** ------------------- feed rendering ------------------- */
-function renderPostHtml(lang: Lang, username: string, post: ScrapedPost) {
+/** ------------------- destination UX (LINK PREVIEW) ------------------- */
+function safeHashtag(username: string) {
+  const tag = (username || "").replace(/[^A-Za-z0-9_]/g, "");
+  return tag ? `#${tag}` : "";
+}
+
+function postButtons(lang: Lang, username: string, link: string) {
   const s = S(lang);
+  return {
+    inline_keyboard: [
+      [
+        { text: s.openOriginal, url: link },
+        { text: s.openChannel, url: `https://t.me/${username}` },
+      ],
+    ],
+  };
+}
+
+// ✅ clean card + include ORIGINAL LINK in message text so Telegram shows preview (video thumb etc)
+function renderPostMessageHtml(lang: Lang, username: string, post: ScrapedPost) {
+  const s = S(lang);
+  const header = `<b>📰 @${escapeHtml(username)}</b>  <code>${post.postId}</code>`;
+  const tag = safeHashtag(username);
+  const tagLine = tag ? `\n${escapeHtml(tag)}` : "";
+
   const raw = (post.text || "").trim() || s.noText;
+  // keep space so preview renders nicely
+  const bodyText = truncate(raw, 2400);
 
-  const maxTotal = 3400;
-  const text = raw.length > maxTotal ? raw.slice(0, maxTotal) + "…" : raw;
+  const block =
+    bodyText.length > 900
+      ? `<blockquote expandable>${escapeHtml(bodyText)}</blockquote>`
+      : `<blockquote>${escapeHtml(bodyText)}</blockquote>`;
 
-  const previewLen = 220;
-  const preview = text.length > previewLen ? text.slice(0, previewLen) + "…" : text;
-
-  const header = `<b>@${escapeHtml(username)}</b> <code>#${post.postId}</code>`;
-  const previewQ = `<blockquote>${escapeHtml(preview)}</blockquote>`;
-  const fullQ = text.length > previewLen + 10 ? `\n<blockquote expandable>${escapeHtml(text)}</blockquote>` : "";
-
-  return `${header}\n${previewQ}${fullQ}`;
+  // IMPORTANT: put the raw URL in text (not only button) to trigger preview
+  return `${header}${tagLine}\n\n${block}\n\n🔗 ${post.link}`;
 }
 
 async function sendFeedPost(env: Env, destChatId: number, lang: Lang, username: string, post: ScrapedPost) {
-  const s = S(lang);
-  const body = renderPostHtml(lang, username, post);
+  const body = renderPostMessageHtml(lang, username, post);
 
-  // media first (instagram-ish)
-  if (post.photos?.length) {
-    const caption = `<b>@${escapeHtml(username)}</b> <code>#${post.postId}</code>`;
-    try {
-      if (post.photos.length >= 2) {
-        const media = post.photos.slice(0, 10).map((url, idx) => {
-          const item: any = { type: "photo", media: url };
-          if (idx === 0) {
-            item.caption = caption;
-            item.parse_mode = "HTML";
-          }
-          return item;
-        });
-        await tg(env, "sendMediaGroup", { chat_id: destChatId, media });
-      } else {
-        await tg(env, "sendPhoto", { chat_id: destChatId, photo: post.photos[0], caption, parse_mode: "HTML" });
-      }
-    } catch {
-      // ignore, fallback to text-only below
-    }
-  }
-
-  // readable text in-app + original button
+  // ✅ Do NOT disable previews. This will show a preview card for t.me links (including video thumbnail)
   await tg(env, "sendMessage", {
     chat_id: destChatId,
     text: body,
     parse_mode: "HTML",
-    disable_web_page_preview: true,
-    reply_markup: { inline_keyboard: [[{ text: s.openOriginal, url: post.link }]] },
+    // no disable_web_page_preview here
+    reply_markup: postButtons(lang, username, post.link),
   });
 }
 
@@ -709,6 +772,23 @@ async function deliverRealtime(env: Env, userId: number, destChatId: number, use
   }
 }
 
+function safeParseMediaJson(raw: any): MediaItem[] {
+  try {
+    if (!raw) return [];
+    const arr = JSON.parse(String(raw));
+    if (!Array.isArray(arr)) return [];
+    const out: MediaItem[] = [];
+    for (const it of arr) {
+      const kind = String(it?.kind || "");
+      const url = String(it?.url || "");
+      if ((kind === "photo" || kind === "video" || kind === "document") && url) out.push({ kind, url } as MediaItem);
+    }
+    return out.slice(0, 10);
+  } catch {
+    return [];
+  }
+}
+
 async function flushQueuedRealtime(env: Env, userId: number, prefs: any) {
   if (isQuietNow(prefs)) return;
 
@@ -717,7 +797,7 @@ async function flushQueuedRealtime(env: Env, userId: number, prefs: any) {
 
   const rows = await env.DB
     .prepare(
-      `SELECT qr.username, qr.post_id, sp.text, sp.link
+      `SELECT qr.username, qr.post_id, sp.text, sp.link, sp.media_json
        FROM queued_realtime qr
        LEFT JOIN scraped_posts sp ON sp.username=qr.username AND sp.post_id=qr.post_id
        WHERE qr.user_id=?
@@ -734,7 +814,7 @@ async function flushQueuedRealtime(env: Env, userId: number, prefs: any) {
       postId: Number(r.post_id),
       text: String(r.text || ""),
       link: String(r.link || `https://t.me/${r.username}/${r.post_id}`),
-      photos: [],
+      media: safeParseMediaJson(r.media_json),
     };
 
     try {
@@ -777,7 +857,6 @@ async function showSettings(env: Env, userId: number, message_id?: number) {
   const s = S(prefs.lang);
 
   const text = s.settingsText(prefs.realtime_enabled, prefs.digest_hours, prefs.quiet_start, prefs.quiet_end, prefs.default_backfill_n);
-
   await sendOrEdit(env, { chat_id: userId, message_id, text, reply_markup: settingsKb(prefs.lang, prefs, hasDest) });
 }
 
@@ -867,7 +946,7 @@ async function showList(env: Env, userId: number, page: number, message_id?: num
     chat_id: userId,
     message_id,
     text: `${s.myChannels}\n\n${lines.join("\n")}\n\n${t(prefs.lang, "برای مدیریت، روی دکمه هر کانال بزن.", "Tap a channel button to manage.")}`,
-    reply_markup: { inline_keyboard: [...keyboardRows, [ { text: s.addChannel, callback_data: "m:follow" } ], [ ...navRow ]] },
+    reply_markup: { inline_keyboard: [...keyboardRows, [{ text: s.addChannel, callback_data: "m:follow" }], [...navRow]] },
   });
 }
 
@@ -958,8 +1037,8 @@ async function handleFollowInput(env: Env, userId: number, input: string) {
 
   for (const p of backfill) {
     await env.DB
-      .prepare("INSERT OR IGNORE INTO scraped_posts(username, post_id, text, link, scraped_at) VALUES(?, ?, ?, ?, ?)")
-      .bind(username, p.postId, p.text || "", p.link, nowSec())
+      .prepare("INSERT OR IGNORE INTO scraped_posts(username, post_id, text, link, media_json, scraped_at) VALUES(?, ?, ?, ?, ?, ?)")
+      .bind(username, p.postId, p.text || "", p.link, JSON.stringify(p.media || []), nowSec())
       .run();
   }
 
@@ -1100,7 +1179,6 @@ async function handleCallback(env: Env, cq: any) {
 
   const prefs = await ensurePrefs(env.DB, userId);
   const dest = await getDestination(env.DB, userId);
-  const hasDest = !!dest?.verified;
 
   const data = String(cq.data || "");
   const message_id = cq?.message?.message_id as number | undefined;
@@ -1124,7 +1202,6 @@ async function handleCallback(env: Env, cq: any) {
     return showChannelSettings(env, userId, u, message_id);
   }
 
-  // Settings actions
   if (data === "set:lang") {
     const next: Lang = prefs.lang === "fa" ? "en" : "fa";
     await setPrefs(env.DB, userId, { lang: next });
@@ -1156,12 +1233,12 @@ async function handleCallback(env: Env, cq: any) {
   }
 
   if (data === "set:test") {
-    if (!dest?.verified) return sendHome(env, userId, message_id);
-    await tg(env, "sendMessage", { chat_id: Number(dest.chat_id), text: S(prefs.lang).testOk });
+    const d = await getDestination(env.DB, userId);
+    if (!d?.verified) return sendHome(env, userId, message_id);
+    await tg(env, "sendMessage", { chat_id: Number(d.chat_id), text: S(prefs.lang).testOk });
     return showSettings(env, userId, message_id);
   }
 
-  // Channel actions
   if (data.startsWith("c:pause:")) {
     const u = data.split(":").slice(2).join(":");
     await env.DB.prepare("UPDATE user_sources SET paused=1 WHERE user_id=? AND username=?").bind(userId, u).run();
@@ -1186,7 +1263,6 @@ async function handleCallback(env: Env, cq: any) {
     return showList(env, userId, 0, message_id);
   }
 
-  // Filters
   if (data.startsWith("f:menu:")) {
     const u = data.split(":").slice(2).join(":");
     return showFilters(env, userId, u, message_id);
@@ -1209,7 +1285,6 @@ async function handleCallback(env: Env, cq: any) {
     return;
   }
 
-  // Backfill per channel
   if (data.startsWith("bf:menu:")) {
     const u = data.split(":").slice(2).join(":");
     await sendOrEdit(env, { chat_id: userId, message_id, text: t(prefs.lang, `📌 بک‌فیل @${u}\nچند پست آخر هنگام Follow ارسال شود؟`, `📌 Backfill @${u}\nHow many last posts on follow?`), reply_markup: backfillKb(prefs.lang, u) });
@@ -1386,8 +1461,8 @@ async function runScrapeTick(env: Env) {
 
       for (const p of newPosts) {
         await env.DB
-          .prepare("INSERT OR IGNORE INTO scraped_posts(username, post_id, text, link, scraped_at) VALUES(?, ?, ?, ?, ?)")
-          .bind(username, p.postId, p.text || "", p.link, nowSec())
+          .prepare("INSERT OR IGNORE INTO scraped_posts(username, post_id, text, link, media_json, scraped_at) VALUES(?, ?, ?, ?, ?, ?)")
+          .bind(username, p.postId, p.text || "", p.link, JSON.stringify(p.media || []), nowSec())
           .run();
       }
 
@@ -1452,7 +1527,6 @@ async function runScrapeTick(env: Env) {
     }
   });
 
-  // flush quiet-hour queue
   const queuedUsers = await env.DB.prepare("SELECT DISTINCT user_id FROM queued_realtime").all<any>();
   for (const r of queuedUsers.results || []) {
     const userId = Number(r.user_id);
@@ -1460,7 +1534,6 @@ async function runScrapeTick(env: Env) {
     await flushQueuedRealtime(env, userId, prefs).catch(() => {});
   }
 
-  // digest due users
   const digestUsers = await env.DB.prepare("SELECT DISTINCT user_id FROM user_sources WHERE mode='digest' AND paused=0").all<any>();
   for (const r of digestUsers.results || []) {
     await sendDigestForUser(env, Number(r.user_id), false).catch(() => {});
@@ -1604,7 +1677,6 @@ app.get("/admin/ticker/status", async (c) => {
 export default {
   fetch: app.fetch,
 
-  // cron only “kicks” the ticker
   scheduled: async (_controller: ScheduledController, env: Env, ctx: ExecutionContext) => {
     ctx.waitUntil(ensureTickerStarted(env));
   },
