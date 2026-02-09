@@ -1,4 +1,4 @@
-﻿import { Lang, PostStyle, UserPrefs } from "../types";
+import { FullTextStyle, Lang, PostStyle, UserPrefs } from "../types";
 
 export function t(lang: Lang, fa: string, en: string) {
   return lang === "fa" ? fa : en;
@@ -38,6 +38,9 @@ export function S(lang: Lang) {
     postStyle: L("🧩 سبک پست", "🧩 Post Style"),
     styleCompact: L("فشرده", "Compact"),
     styleRich: L("کامل", "Rich"),
+    fullTextStyle: L("🧱 استایل متن کامل", "🧱 Full Text Style"),
+    styleQuote: L("کادر", "Quote"),
+    stylePlain: L("ساده", "Plain"),
     hours: L("ساعت", "hours"),
 
     realtimeOn: L("روشن ✅", "ON ✅"),
@@ -45,6 +48,7 @@ export function S(lang: Lang) {
 
     openOriginal: L("🔗 پست اصلی", "🔗 Original post"),
     openChannel: L("📣 کانال", "📣 Channel"),
+    openProfile: L("🖼 عکس پروفایل", "🖼 Profile photo"),
     noText: L("(بدون متن)", "(no text)"),
 
     needDestFirst: L("⚠️ اول کانال مقصد را تنظیم کن.", "⚠️ Set destination first."),
@@ -140,9 +144,11 @@ export function S(lang: Lang) {
     lastSeenLabel: L("آخرین", "Last"),
 
     defaultLabel: L("فید", "Feed"),
-    via: L("از", "via"),
     quietOff: L("خاموش", "OFF"),
     quietRange: (qs: number, qe: number) => `${qs}:00 → ${qe}:00 (UTC)`,
+
+    linkOriginal: L("پست اصلی", "Original post"),
+    linkProfile: L("عکس پروفایل", "Profile photo"),
   };
 }
 
@@ -161,9 +167,8 @@ function oneLine(s: string) {
   return (s || "").replace(/\s+/g, " ").trim();
 }
 
-function metaLine(lang: Lang, username: string) {
-  const s = S(lang);
-  return `${s.via} @${escapeHtml(username)}`;
+export function renderHeaderLine(lang: Lang, username: string, label?: string | null) {
+  return headerLine(lang, username, label);
 }
 
 function badgeText(lang: Lang, label?: string | null) {
@@ -179,6 +184,17 @@ function headerLine(lang: Lang, username: string, label?: string | null) {
 
 type RenderedMessage = { text: string; reply_markup: any };
 
+function profilePicUrl(username: string) {
+  return `https://t.me/i/userpic/320/${username}.jpg`;
+}
+
+function footerLinks(lang: Lang, postLink: string, username: string) {
+  const s = S(lang);
+  const a = `<a href="${postLink}">${escapeHtml(s.linkOriginal)}</a>`;
+  const b = `<a href="${profilePicUrl(username)}">${escapeHtml(s.linkProfile)}</a>`;
+  return `${a} • ${b}`;
+}
+
 export function postButtons(lang: Lang, username: string, link: string) {
   const s = S(lang);
   return {
@@ -187,6 +203,7 @@ export function postButtons(lang: Lang, username: string, link: string) {
         { text: s.openOriginal, url: link },
         { text: s.openChannel, url: `https://t.me/${username}` },
       ],
+      [{ text: s.openProfile, url: profilePicUrl(username) }],
     ],
   };
 }
@@ -198,7 +215,8 @@ export function renderCompactPost(
   channelLabel: string | null,
   postText: string,
   postLink: string,
-  timeSec?: number
+  timeSec?: number,
+  opts?: { includeHeader?: boolean }
 ): RenderedMessage {
   const s = S(lang);
   const header = headerLine(lang, channelUsername, channelLabel);
@@ -206,11 +224,10 @@ export function renderCompactPost(
   const snippetSource = raw || s.noText;
   const snippet = truncateText(oneLine(snippetSource), 160);
   const safeSnippet = escapeHtml(snippet);
-  const meta = metaLine(lang, channelUsername);
 
-  const lines = [header, safeSnippet];
-  if (meta) lines.push(meta);
-  lines.push(postLink);
+  const includeHeader = opts?.includeHeader !== false;
+  const lines = includeHeader ? [header, safeSnippet] : [safeSnippet];
+  lines.push(footerLinks(lang, postLink, channelUsername));
 
   return { text: lines.join("\n"), reply_markup: postButtons(lang, channelUsername, postLink) };
 }
@@ -222,7 +239,8 @@ export function renderRichPost(
   channelLabel: string | null,
   postText: string,
   postLink: string,
-  timeSec?: number
+  timeSec?: number,
+  opts?: { includeHeader?: boolean; fullTextStyle?: FullTextStyle }
 ): RenderedMessage {
   const s = S(lang);
   const header = headerLine(lang, channelUsername, channelLabel);
@@ -235,15 +253,20 @@ export function renderRichPost(
   let fullBlock = "";
   if (fullNeeded) {
     const full = truncateText(raw, 1800);
-    if (full && full !== short) fullBlock = `<blockquote expandable>${escapeHtml(full)}</blockquote>`;
+    if (full && full !== short) {
+      if (opts?.fullTextStyle === "plain") {
+        fullBlock = escapeHtml(full);
+      } else {
+        fullBlock = `<blockquote expandable>${escapeHtml(full)}</blockquote>`;
+      }
+    }
   }
 
-  const meta = metaLine(lang, channelUsername);
+  const includeHeader = opts?.includeHeader !== false;
 
-  const parts = [header, shortBlock];
+  const parts = includeHeader ? [header, shortBlock] : [shortBlock];
   if (fullBlock) parts.push(fullBlock);
-  if (meta) parts.push(meta);
-  parts.push(postLink);
+  parts.push(footerLinks(lang, postLink, channelUsername));
 
   return { text: parts.join("\n\n"), reply_markup: postButtons(lang, channelUsername, postLink) };
 }
@@ -255,11 +278,12 @@ export function renderDestinationPost(
   channelLabel: string | null,
   postText: string,
   postLink: string,
-  timeSec?: number
+  timeSec?: number,
+  opts?: { includeHeader?: boolean; fullTextStyle?: FullTextStyle }
 ): RenderedMessage {
   return style === "compact"
-    ? renderCompactPost(lang, channelUsername, channelLabel, postText, postLink, timeSec)
-    : renderRichPost(lang, channelUsername, channelLabel, postText, postLink, timeSec);
+    ? renderCompactPost(lang, channelUsername, channelLabel, postText, postLink, timeSec, opts)
+    : renderRichPost(lang, channelUsername, channelLabel, postText, postLink, timeSec, opts);
 }
 
 /** ------------------- keyboards ------------------- */
@@ -294,6 +318,7 @@ export function homeKeyboard(lang: Lang, hasDest: boolean) {
 export function settingsKeyboard(lang: Lang, prefs: UserPrefs, hasDest: boolean) {
   const s = S(lang);
   const styleName = prefs.post_style === "compact" ? s.styleCompact : s.styleRich;
+  const fullStyleName = prefs.full_text_style === "plain" ? s.stylePlain : s.styleQuote;
   const rows: any[] = [];
 
   rows.push([
@@ -302,6 +327,7 @@ export function settingsKeyboard(lang: Lang, prefs: UserPrefs, hasDest: boolean)
   ]);
 
   rows.push([{ text: `${s.postStyle}: ${styleName}`, callback_data: "set:style" }]);
+  rows.push([{ text: `${s.fullTextStyle}: ${fullStyleName}`, callback_data: "set:fulltext" }]);
   rows.push([{ text: s.digest, callback_data: "set:digest" }]);
   rows.push([{ text: s.quiet, callback_data: "set:quiet" }]);
   rows.push([{ text: s.defaultBackfill, callback_data: "set:dbf" }]);

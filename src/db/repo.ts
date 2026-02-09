@@ -36,8 +36,8 @@ export async function ensurePrefs(db: D1Database, userId: number): Promise<UserP
     .prepare(
       `INSERT OR IGNORE INTO user_prefs(
         user_id, lang, digest_hours, last_digest_at, realtime_enabled, updated_at,
-        default_backfill_n, quiet_start, quiet_end, post_style
-      ) VALUES(?, 'fa', 6, 0, 1, ?, 3, -1, -1, 'rich')`
+        default_backfill_n, quiet_start, quiet_end, post_style, full_text_style
+      ) VALUES(?, 'fa', 6, 0, 1, ?, 3, -1, -1, 'rich', 'quote')`
     )
     .bind(userId, nowSec())
     .run();
@@ -45,7 +45,7 @@ export async function ensurePrefs(db: D1Database, userId: number): Promise<UserP
   const row = await db
     .prepare(
       `SELECT lang, digest_hours, last_digest_at, realtime_enabled,
-              default_backfill_n, quiet_start, quiet_end, post_style
+              default_backfill_n, quiet_start, quiet_end, post_style, full_text_style
        FROM user_prefs WHERE user_id=?`
     )
     .bind(userId)
@@ -53,6 +53,7 @@ export async function ensurePrefs(db: D1Database, userId: number): Promise<UserP
 
   const lang: Lang = row?.lang === "en" ? "en" : "fa";
   const post_style: PostStyle = row?.post_style === "compact" ? "compact" : "rich";
+  const full_text_style = row?.full_text_style === "plain" ? "plain" : "quote";
 
   return {
     lang,
@@ -63,6 +64,7 @@ export async function ensurePrefs(db: D1Database, userId: number): Promise<UserP
     quiet_start: Number(row?.quiet_start ?? -1),
     quiet_end: Number(row?.quiet_end ?? -1),
     post_style,
+    full_text_style,
   };
 }
 
@@ -71,12 +73,13 @@ export async function setPrefs(db: D1Database, userId: number, patch: Partial<Us
   const next = { ...cur, ...patch };
   const lang: Lang = next.lang === "en" ? "en" : "fa";
   const post_style: PostStyle = next.post_style === "compact" ? "compact" : "rich";
+  const full_text_style = next.full_text_style === "plain" ? "plain" : "quote";
 
   await db
     .prepare(
       `UPDATE user_prefs SET
         lang=?, digest_hours=?, last_digest_at=?, realtime_enabled=?, updated_at=?,
-        default_backfill_n=?, quiet_start=?, quiet_end=?, post_style=?
+        default_backfill_n=?, quiet_start=?, quiet_end=?, post_style=?, full_text_style=?
        WHERE user_id=?`
     )
     .bind(
@@ -89,6 +92,7 @@ export async function setPrefs(db: D1Database, userId: number, patch: Partial<Us
       Number(next.quiet_start ?? -1),
       Number(next.quiet_end ?? -1),
       post_style,
+      full_text_style,
       userId
     )
     .run();

@@ -157,6 +157,7 @@ async function showSettings(env: Env, userId: number, message_id?: number) {
 
   const quiet = prefs.quiet_start < 0 || prefs.quiet_end < 0 ? s.quietOff : s.quietRange(prefs.quiet_start, prefs.quiet_end);
   const styleName = prefs.post_style === "compact" ? s.styleCompact : s.styleRich;
+  const fullStyleName = prefs.full_text_style === "plain" ? s.stylePlain : s.styleQuote;
 
   const text = [
     s.settingsTitle,
@@ -166,6 +167,7 @@ async function showSettings(env: Env, userId: number, message_id?: number) {
     `${s.quiet}: ${quiet}`,
     `${s.defaultBackfill}: ${prefs.default_backfill_n}`,
     `${s.postStyle}: ${styleName}`,
+    `${s.fullTextStyle}: ${fullStyleName}`,
   ].join("\n");
 
   await sendOrEdit(env, { chat_id: userId, message_id, text, reply_markup: settingsKeyboard(prefs.lang, prefs, !!dest?.verified) });
@@ -473,6 +475,12 @@ export async function handleCallback(env: Env, cq: any) {
   if (data === "set:style") {
     const next = prefs.post_style === "compact" ? "rich" : "compact";
     await setPrefs(env.DB, userId, { post_style: next });
+    return showSettings(env, userId, message_id);
+  }
+
+  if (data === "set:fulltext") {
+    const next = prefs.full_text_style === "plain" ? "quote" : "plain";
+    await setPrefs(env.DB, userId, { full_text_style: next });
     return showSettings(env, userId, message_id);
   }
 

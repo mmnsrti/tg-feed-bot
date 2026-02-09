@@ -12,6 +12,7 @@ export type TgUpdate = any;
 
 export type Lang = "fa" | "en";
 export type PostStyle = "compact" | "rich";
+export type FullTextStyle = "quote" | "plain";
 export type ChannelMode = "realtime" | "digest";
 
 export type MediaKind = "photo" | "video" | "document";
@@ -33,6 +34,7 @@ export type UserPrefs = {
   quiet_start: number;
   quiet_end: number;
   post_style: PostStyle;
+  full_text_style: FullTextStyle;
 };
 
 export type DestinationRow = {

@@ -5,7 +5,7 @@ export async function ensureDbUpgrades(db: D1Database) {
 
   const row = await db.prepare("SELECT value FROM meta_kv WHERE key='schema_v'").first<any>();
   const v = Number(row?.value ?? 0);
-  if (v >= 4) return;
+  if (v >= 5) return;
 
   // v1
   if (v < 1) {
@@ -73,5 +73,15 @@ export async function ensureDbUpgrades(db: D1Database) {
     }
   }
 
-  await db.prepare("INSERT OR REPLACE INTO meta_kv(key, value) VALUES('schema_v', '4')").run();
+  // v5: full text style preference
+  if (v < 5) {
+    const altersV5 = ["ALTER TABLE user_prefs ADD COLUMN full_text_style TEXT NOT NULL DEFAULT 'quote'"];
+    for (const q of altersV5) {
+      try {
+        await db.prepare(q).run();
+      } catch {}
+    }
+  }
+
+  await db.prepare("INSERT OR REPLACE INTO meta_kv(key, value) VALUES('schema_v', '5')").run();
 }
