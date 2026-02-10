@@ -77,6 +77,23 @@ function safeParseMediaJson(raw: any): MediaItem[] {
   }
 }
 
+function isDestinationAccessError(err: TelegramError) {
+  if (err.code === 403) return true;
+  if (err.code !== 400) return false;
+  const desc = String(err.description || "").toLowerCase();
+  const patterns = [
+    "chat not found",
+    "channel private",
+    "not enough rights",
+    "need administrator rights",
+    "have no rights",
+    "bot was kicked",
+    "bot was blocked",
+    "not a member",
+  ];
+  return patterns.some((p) => desc.includes(p));
+}
+
 async function sendFeedPost(env: Env, destChatId: number, prefs: UserPrefs, username: string, label: string | null, post: ScrapedPost) {
   const link = post.link || `https://t.me/${username}/${post.postId}`;
   const rendered = renderDestinationPost(prefs.post_style, prefs.lang, username, label, post.text, link, nowSec(), {
@@ -118,7 +135,7 @@ export async function deliverRealtime(
   try {
     await sendFeedPost(env, destChatId, prefs, username, label, post);
   } catch (e: any) {
-    if (e instanceof TelegramError && (e.code === 403 || e.code === 400)) {
+    if (e instanceof TelegramError && isDestinationAccessError(e)) {
       await markDestinationBad(env.DB, userId);
     }
     await env.DB.prepare("DELETE FROM deliveries WHERE user_id=? AND username=? AND post_id=?").bind(userId, username, post.postId).run();
