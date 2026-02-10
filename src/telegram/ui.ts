@@ -231,11 +231,14 @@ function headerLine(lang: Lang, username: string, label?: string | null) {
 
 type RenderedMessage = { text: string; reply_markup: any };
 
+const BRAND_URL = "https://t.me/uniflyio";
+const BRAND_HANDLE = "@uniflyio";
 
 function footerLinks(lang: Lang, postLink: string) {
   const s = S(lang);
   const a = `<a href="${postLink}">${escapeHtml(s.linkOriginal)}</a>`;
-  return `${a}`;
+  const brand = `<i>Follow <a href="${BRAND_URL}">${escapeHtml(BRAND_HANDLE)}</a></i>`;
+  return `${a}\n\n${brand}`;
 }
 
 export function postButtons(lang: Lang, username: string, link: string) {
