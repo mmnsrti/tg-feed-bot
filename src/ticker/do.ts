@@ -3,6 +3,7 @@ import { tg, TelegramError } from "../telegram/client";
 import { renderDestinationPost, t } from "../telegram/ui";
 import { clamp, ensurePrefs, getDestination, markDestinationBad, nowSec, setPrefs } from "../db/repo";
 import { fetchTme, scrapeTmePreview } from "../scraper/tme";
+import { shouldStoreScrapedPosts } from "../config";
 
 const FIRST_SYNC_LIMIT = 5;
 
@@ -198,6 +199,7 @@ function splitTelegramText(text: string, max = 3800): string[] {
 }
 
 export async function sendDigestForUser(env: Env, userId: number, force = false) {
+  if (!shouldStoreScrapedPosts(env)) return;
   const prefs = await ensurePrefs(env.DB, userId);
   const dest = await getDestination(env.DB, userId);
   if (!dest?.verified) return;
@@ -296,6 +298,7 @@ async function pMapLimit<T, R>(items: T[], limit: number, fn: (x: T) => Promise<
 }
 
 export async function runScrapeTick(env: Env) {
+  const storeScraped = shouldStoreScrapedPosts(env);
   const due = await env.DB
     .prepare(
       `SELECT s.username, s.last_post_id, s.check_every_sec, s.fail_count
@@ -324,11 +327,13 @@ export async function runScrapeTick(env: Env) {
       let newPosts = posts.filter((p) => p.postId > lastSeen);
       if (lastSeen === 0 && newPosts.length > FIRST_SYNC_LIMIT) newPosts = newPosts.slice(-FIRST_SYNC_LIMIT);
 
-      for (const p of newPosts) {
-        await env.DB
-          .prepare("INSERT OR IGNORE INTO scraped_posts(username, post_id, text, link, media_json, scraped_at) VALUES(?, ?, ?, ?, ?, ?)")
-          .bind(username, p.postId, p.text || "", p.link, JSON.stringify(p.media || []), nowSec())
-          .run();
+      if (storeScraped && newPosts.length) {
+        for (const p of newPosts) {
+          await env.DB
+            .prepare("INSERT OR IGNORE INTO scraped_posts(username, post_id, text, link, media_json, scraped_at) VALUES(?, ?, ?, ?, ?, ?)")
+            .bind(username, p.postId, p.text || "", p.link, JSON.stringify(p.media || []), nowSec())
+            .run();
+        }
       }
 
       if (newPosts.length) {
@@ -399,9 +404,11 @@ export async function runScrapeTick(env: Env) {
     await flushQueuedRealtime(env, userId, prefs).catch(() => {});
   }
 
-  const digestUsers = await env.DB.prepare("SELECT DISTINCT user_id FROM user_sources WHERE mode='digest' AND paused=0").all<any>();
-  for (const r of digestUsers.results || []) {
-    await sendDigestForUser(env, Number(r.user_id), false).catch(() => {});
+  if (storeScraped) {
+    const digestUsers = await env.DB.prepare("SELECT DISTINCT user_id FROM user_sources WHERE mode='digest' AND paused=0").all<any>();
+    for (const r of digestUsers.results || []) {
+      await sendDigestForUser(env, Number(r.user_id), false).catch(() => {});
+    }
   }
 }
 

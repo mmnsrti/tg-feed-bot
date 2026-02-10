@@ -6,6 +6,7 @@ export type Env = {
   WEBHOOK_SECRET: string;
   ADMIN_KEY?: string;
   TICKER: DurableObjectNamespace;
+  STORE_SCRAPED_POSTS?: string;
 };
 
 export type TgUpdate = any;
