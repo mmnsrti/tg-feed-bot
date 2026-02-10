@@ -115,12 +115,12 @@ export function S(lang: Lang) {
 
     destTitle: L("🎯 تنظیم کانال مقصد", "🎯 Set Destination"),
     destSteps: L(
-      "1) یک کانال مقصد بساز (عمومی یا خصوصی)\n2) ربات را ادمین کن و اجازه ارسال بده\n3) این خط را در کانال بفرست:",
-      "1) Create a destination channel (public or private)\n2) Add the bot as admin and allow posting\n3) Post this line in the channel:"
+      "1) یک کانال مقصد بساز (عمومی یا خصوصی)\n2) ربات را ادمین کن و اجازه ارسال بده\n3) کدِ پیام بعدی را در کانال بفرست:",
+      "1) Create a destination channel (public or private)\n2) Add the bot as admin and allow posting\n3) Post the code from the next message in the channel:"
     ),
     copyHint: L(
-      "برای کپی، روی متن کادر لمس طولانی کن و بعد در کانال مقصد بفرست.",
-      "Long-press the code block to copy, then paste it in the destination channel."
+      "نکته: پیام بعدی فقط کد است—می‌توانی بدون ویرایش فوروارد کنی یا با لمس طولانی کپی کنی.",
+      "Tip: the next message is code-only. Forward it to the channel or long-press to copy."
     ),
 
     digestAskHours: L("عدد بازه خلاصه را بفرست (۱ تا ۲۴). مثلا 6", "Send digest interval in hours (1..24). Example: 6"),
