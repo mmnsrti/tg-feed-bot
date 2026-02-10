@@ -27,6 +27,7 @@ import {
 } from "../db/repo";
 import { fetchTme, scrapeTmePreview } from "../scraper/tme";
 import { deliverRealtime, MIN_POLL_SEC } from "../ticker/do";
+import { shouldStoreScrapedPosts } from "../config";
 
 const LIST_PAGE_SIZE = 8;
 const MAX_LABEL_LEN = 32;
@@ -363,11 +364,13 @@ async function handleFollowInput(env: Env, userId: number, input: string) {
 
   const backfill = backfillN > 0 ? posts.slice(-backfillN) : [];
 
-  for (const p of backfill) {
-    await env.DB
-      .prepare("INSERT OR IGNORE INTO scraped_posts(username, post_id, text, link, media_json, scraped_at) VALUES(?, ?, ?, ?, ?, ?)")
-      .bind(username, p.postId, p.text || "", p.link, JSON.stringify(p.media || []), nowSec())
-      .run();
+  if (shouldStoreScrapedPosts(env) && backfill.length) {
+    for (const p of backfill) {
+      await env.DB
+        .prepare("INSERT OR IGNORE INTO scraped_posts(username, post_id, text, link, media_json, scraped_at) VALUES(?, ?, ?, ?, ?, ?)")
+        .bind(username, p.postId, p.text || "", p.link, JSON.stringify(p.media || []), nowSec())
+        .run();
+    }
   }
 
   if (prefs.realtime_enabled && backfill.length) {
