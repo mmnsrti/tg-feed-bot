@@ -185,9 +185,10 @@ async function createDestToken(env: Env, userId: number, message_id?: number) {
 
   const line = `DEST ${token}`;
 
-  const text = [`✅ ${s.destTitle}`, "", s.destSteps, "", s.copyHint, "", `<pre>${line}</pre>`].join("\n");
+  const text = [`✅ ${s.destTitle}`, "", s.destSteps, "", s.copyHint].join("\n");
 
-  await sendOrEdit(env, { chat_id: userId, message_id, text, parse_mode: "HTML", reply_markup: backKeyboard(prefs.lang, "m:home") });
+  await sendOrEdit(env, { chat_id: userId, message_id, text, reply_markup: backKeyboard(prefs.lang, "m:home") });
+  await tg(env, "sendMessage", { chat_id: userId, text: `<pre>${line}</pre>`, parse_mode: "HTML" });
 }
 
 async function startFollowFlow(env: Env, userId: number) {
