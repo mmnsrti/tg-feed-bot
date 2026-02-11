@@ -303,26 +303,20 @@ export function renderRichPost(
   const header = headerLine(lang, channelUsername, channelLabel);
 
   const raw = (postText || "").trim() || s.noText;
-  const short = truncateText(oneLine(raw), 320);
-  const shortBlock = `<blockquote>${escapeHtml(short)}</blockquote>`;
+  const isLong = oneLine(raw).length > 450;
+  const full = isLong ? truncateText(raw, 1800) : raw;
 
-  const fullNeeded = oneLine(raw).length > short.length + 40;
-  let fullBlock = "";
-  if (fullNeeded) {
-    const full = truncateText(raw, 1800);
-    if (full && full !== short) {
-      if (opts?.fullTextStyle === "plain") {
-        fullBlock = escapeHtml(full);
-      } else {
-        fullBlock = `<blockquote expandable>${escapeHtml(full)}</blockquote>`;
-      }
-    }
+  let body = "";
+  if (opts?.fullTextStyle === "plain") {
+    body = escapeHtml(full);
+  } else if (isLong) {
+    body = `<blockquote expandable>${escapeHtml(full)}</blockquote>`;
+  } else {
+    body = `<blockquote>${escapeHtml(full)}</blockquote>`;
   }
 
   const includeHeader = opts?.includeHeader !== false;
-
-  const parts = includeHeader ? [header, shortBlock] : [shortBlock];
-  if (fullBlock) parts.push(fullBlock);
+  const parts = includeHeader ? [header, body] : [body];
   parts.push(footerLinks(lang, postLink));
 
   return { text: parts.join("\n\n"), reply_markup: postButtons(lang, channelUsername, postLink) };
