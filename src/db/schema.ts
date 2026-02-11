@@ -29,8 +29,8 @@ export async function ensureDbUpgrades(db: D1Database) {
       "ALTER TABLE sources ADD COLUMN last_error TEXT",
       "ALTER TABLE sources ADD COLUMN last_error_at INTEGER NOT NULL DEFAULT 0",
       "ALTER TABLE sources ADD COLUMN last_success_at INTEGER NOT NULL DEFAULT 0",
-      "ALTER TABLE user_sources ADD COLUMN backfill_n INTEGER NOT NULL DEFAULT 3",
-      "ALTER TABLE user_prefs ADD COLUMN default_backfill_n INTEGER NOT NULL DEFAULT 3",
+      "ALTER TABLE user_sources ADD COLUMN backfill_n INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE user_prefs ADD COLUMN default_backfill_n INTEGER NOT NULL DEFAULT 0",
       "ALTER TABLE user_prefs ADD COLUMN quiet_start INTEGER NOT NULL DEFAULT -1",
       "ALTER TABLE user_prefs ADD COLUMN quiet_end INTEGER NOT NULL DEFAULT -1",
     ];

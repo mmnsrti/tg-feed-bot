@@ -1,6 +1,6 @@
-﻿import { Env, Lang, ScrapedPost } from "../types";
+﻿import { Env, Lang, ScrapedPost, UserPrefs } from "../types";
 import { tg } from "./client";
-import { S, backKeyboard, backfillKeyboard, cancelKeyboard, channelKeyboard, filtersKeyboard, homeKeyboard, settingsKeyboard } from "./ui";
+import { S, backKeyboard, backfillKeyboard, cancelKeyboard, channelKeyboard, filtersKeyboard, followMoreKeyboard, homeKeyboard, settingsKeyboard } from "./ui";
 import {
   addUserSource,
   clearState,
@@ -73,6 +73,15 @@ function parseCmd(text: string) {
   return { cmd, args };
 }
 
+function extractForwardedUsername(msg: any): string | null {
+  const direct = msg?.forward_from_chat?.username || msg?.forward_from?.username;
+  if (direct) return normalizeUsername(String(direct));
+  const origin = msg?.forward_origin;
+  const originChat = origin?.chat?.username;
+  if (originChat) return normalizeUsername(String(originChat));
+  return null;
+}
+
 function makeToken() {
   return crypto.randomUUID().replace(/-/g, "").slice(0, 16);
 }
@@ -119,6 +128,30 @@ function parseKeywords(raw: any): string[] {
   } catch {
     return [];
   }
+}
+
+function extractUsernamesFromText(input: string): { usernames: string[]; invalid: string[] } {
+  const raw = (input || "").trim();
+  const usernames = new Set<string>();
+  const invalid = new Set<string>();
+  const seen = new Set<string>();
+
+  const consider = (token: string) => {
+    const t = (token || "").trim();
+    if (!t) return;
+    if (seen.has(t)) return;
+    seen.add(t);
+    const u = normalizeUsername(t);
+    if (u) usernames.add(u);
+    else if (t.includes("t.me") || t.startsWith("@")) invalid.add(t);
+  };
+
+  for (const m of raw.matchAll(/https?:\/\/t\.me\/(?:s\/)?([A-Za-z0-9_]{2,32})/gi)) consider(m[0]);
+  for (const m of raw.matchAll(/t\.me\/(?:s\/)?([A-Za-z0-9_]{2,32})/gi)) consider(m[0]);
+  for (const m of raw.matchAll(/@([A-Za-z0-9_]{2,32})/g)) consider(`@${m[1]}`);
+  for (const token of raw.split(/[\s,;]+/)) consider(token);
+
+  return { usernames: Array.from(usernames), invalid: Array.from(invalid) };
 }
 
 /** ------------------- menus ------------------- */
@@ -198,11 +231,12 @@ async function startFollowFlow(env: Env, userId: number) {
   const s = S(prefs.lang);
 
   if (!dest?.verified) {
+    await clearState(env.DB, userId);
     await tg(env, "sendMessage", { chat_id: userId, text: s.needDestFirst, reply_markup: homeKeyboard(prefs.lang, false) });
     return;
   }
 
-  await setState(env.DB, userId, "await_follow_username");
+  await setState(env.DB, userId, "await_follow_username", { batch: true });
   await tg(env, "sendMessage", { chat_id: userId, text: s.sendUsername, reply_markup: cancelKeyboard(prefs.lang) });
 }
 
@@ -272,7 +306,7 @@ async function showChannelSettings(env: Env, userId: number, username: string, m
 
   const include = parseKeywords(sub.include_keywords);
   const exclude = parseKeywords(sub.exclude_keywords);
-  const label = (sub.label || "").toString().trim() || s.defaultLabel;
+  const label = (sub.label || "").toString().trim() || username;
 
   const text = [
     s.chSettingsTitle(username),
@@ -328,38 +362,34 @@ async function handleListSearch(env: Env, userId: number, query: string) {
 }
 
 /** ------------------- follow input ------------------- */
-async function handleFollowInput(env: Env, userId: number, input: string) {
-  const prefs = await ensurePrefs(env.DB, userId);
-  const dest = await getDestination(env.DB, userId);
-  const s = S(prefs.lang);
+type FollowResultStatus = "ok" | "already" | "fetch_failed" | "couldnt_read";
+type FollowResult = { username: string; status: FollowResultStatus };
 
-  const username = normalizeUsername(input);
-  if (!username) {
-    await tg(env, "sendMessage", { chat_id: userId, text: s.invalidFormat, reply_markup: cancelKeyboard(prefs.lang) });
-    return;
-  }
+type FollowOpts = { batch?: boolean; mode?: "follow" | "import" };
 
-  if (!dest?.verified) {
-    await sendHome(env, userId);
-    return;
-  }
+type FollowConfirmState = {
+  usernames: string[];
+  invalid?: string[];
+  batch?: boolean;
+  mode?: "follow" | "import";
+};
+
+async function followOneChannel(env: Env, userId: number, username: string, prefs: UserPrefs, destChatId: number): Promise<FollowResult> {
+  const existing = await getUserSource(env.DB, userId, username);
+  if (existing) return { username, status: "already" };
 
   let posts: ScrapedPost[] = [];
   try {
     const html = await fetchTme(username);
     posts = scrapeTmePreview(username, html);
-    if (!posts.length) {
-      await tg(env, "sendMessage", { chat_id: userId, text: s.couldntRead(username), reply_markup: cancelKeyboard(prefs.lang) });
-      return;
-    }
+    if (!posts.length) return { username, status: "couldnt_read" };
   } catch {
-    await tg(env, "sendMessage", { chat_id: userId, text: s.fetchFailed, reply_markup: cancelKeyboard(prefs.lang) });
-    return;
+    return { username, status: "fetch_failed" };
   }
 
   await ensureSource(env.DB, username, MIN_POLL_SEC);
 
-  const backfillN = clamp(Number(prefs.default_backfill_n ?? 3), 0, 10);
+  const backfillN = clamp(Number(prefs.default_backfill_n ?? 0), 0, 10);
   await addUserSource(env.DB, userId, username, backfillN);
 
   const backfill = backfillN > 0 ? posts.slice(-backfillN) : [];
@@ -375,7 +405,7 @@ async function handleFollowInput(env: Env, userId: number, input: string) {
 
   if (prefs.realtime_enabled && backfill.length) {
     for (const p of backfill) {
-      await deliverRealtime(env, userId, Number(dest.chat_id), username, null, p, prefs).catch(() => {});
+      await deliverRealtime(env, userId, destChatId, username, null, p, prefs).catch(() => {});
     }
   }
 
@@ -387,13 +417,100 @@ async function handleFollowInput(env: Env, userId: number, input: string) {
     .bind(latestId, nowSec(), nowSec() + MIN_POLL_SEC, MIN_POLL_SEC, nowSec(), username)
     .run();
 
-  await clearState(env.DB, userId);
+  return { username, status: "ok" };
+}
 
-  await tg(env, "sendMessage", {
-    chat_id: userId,
-    text: prefs.realtime_enabled ? s.followed(username, backfillN) : s.followedNoRealtime(username),
-    reply_markup: homeKeyboard(prefs.lang, true),
-  });
+async function processFollowUsernames(env: Env, userId: number, usernames: string[], invalid: string[] = [], opts: FollowOpts = {}) {
+  const prefs = await ensurePrefs(env.DB, userId);
+  const dest = await getDestination(env.DB, userId);
+  const s = S(prefs.lang);
+
+  if (!dest?.verified) {
+    await clearState(env.DB, userId);
+    await tg(env, "sendMessage", { chat_id: userId, text: s.needDestFirst, reply_markup: homeKeyboard(prefs.lang, false) });
+    return;
+  }
+
+  const unique = Array.from(new Set(usernames));
+  const ok: string[] = [];
+  const already: string[] = [];
+  const failed: string[] = [];
+
+  const destChatId = Number(dest.chat_id);
+  for (const u of unique) {
+    const res = await followOneChannel(env, userId, u, prefs, destChatId);
+    if (res.status === "ok") ok.push(u);
+    else if (res.status === "already") already.push(u);
+    else failed.push(u);
+  }
+
+  const lines: string[] = [s.followSummaryTitle(ok.length, unique.length)];
+  if (ok.length) lines.push(`${s.addedLabel}: ${ok.map((u) => `@${u}`).join(", ")}`);
+  if (already.length) lines.push(`${s.alreadyLabel}: ${already.map((u) => `@${u}`).join(", ")}`);
+  if (failed.length) lines.push(`${s.failedLabel}: ${failed.map((u) => `@${u}`).join(", ")}`);
+  if (invalid.length) lines.push(`${s.invalidLabel}: ${invalid.slice(0, 10).join(", ")}`);
+  if (opts.batch) lines.push("", s.followMoreHint);
+
+  await tg(env, "sendMessage", { chat_id: userId, text: lines.join("\n"), reply_markup: followMoreKeyboard(prefs.lang) });
+
+  if (opts.batch) {
+    await setState(env.DB, userId, "await_follow_username", { batch: true });
+  } else {
+    await clearState(env.DB, userId);
+  }
+}
+
+async function promptFollowConfirm(env: Env, userId: number, usernames: string[], invalid: string[] = [], opts: FollowOpts = {}) {
+  const prefs = await ensurePrefs(env.DB, userId);
+  const s = S(prefs.lang);
+
+  const data: FollowConfirmState = { usernames, invalid, batch: opts.batch, mode: opts.mode || "follow" };
+  await setState(env.DB, userId, "await_follow_confirm", data);
+
+  const lines = [s.followPreviewTitle, "", ...usernames.map((u) => `- @${u}`)];
+  if (invalid.length) lines.push("", `${s.invalidLabel}: ${invalid.slice(0, 10).join(", ")}`);
+
+  const confirm = data.mode === "import" ? "m:import_confirm" : "m:follow_confirm";
+  const cancel = data.mode === "import" ? "m:import_cancel" : "m:follow_cancel";
+
+  const keyboard = { inline_keyboard: [[{ text: s.addAll, callback_data: confirm }, { text: s.cancel, callback_data: cancel }]] };
+  await tg(env, "sendMessage", { chat_id: userId, text: lines.join("\n"), reply_markup: keyboard });
+}
+
+async function handleFollowInput(env: Env, userId: number, input: string, opts: FollowOpts = {}) {
+  const prefs = await ensurePrefs(env.DB, userId);
+  const s = S(prefs.lang);
+
+  const { usernames, invalid } = extractUsernamesFromText(input);
+  if (!usernames.length) {
+    await tg(env, "sendMessage", { chat_id: userId, text: s.invalidFormat, reply_markup: cancelKeyboard(prefs.lang) });
+    return;
+  }
+
+  if (opts.mode === "import") {
+    await promptFollowConfirm(env, userId, usernames, invalid, opts);
+    return;
+  }
+
+  if (usernames.length > 1) {
+    await promptFollowConfirm(env, userId, usernames, invalid, { ...opts, mode: "follow" });
+    return;
+  }
+
+  await processFollowUsernames(env, userId, usernames, invalid, opts);
+}
+
+async function handleImportInput(env: Env, userId: number, input: string) {
+  const prefs = await ensurePrefs(env.DB, userId);
+  const s = S(prefs.lang);
+
+  const { usernames, invalid } = extractUsernamesFromText(input);
+  if (!usernames.length) {
+    await tg(env, "sendMessage", { chat_id: userId, text: s.invalidFormat, reply_markup: cancelKeyboard(prefs.lang) });
+    return;
+  }
+
+  await promptFollowConfirm(env, userId, usernames, invalid, { mode: "import" });
 }
 
 /** ------------------- destination claim ------------------- */
@@ -452,6 +569,31 @@ export async function handleCallback(env: Env, cq: any) {
   if (data === "m:follow") {
     await clearState(env.DB, userId);
     return startFollowFlow(env, userId);
+  }
+  if (data === "m:follow_confirm" || data === "m:import_confirm") {
+    const st = await getState(env.DB, userId);
+    if (!st || st.state !== "await_follow_confirm") return sendHome(env, userId, message_id);
+
+    const payload = st.data || {};
+    const usernames = Array.isArray(payload.usernames) ? payload.usernames.map((u: any) => String(u)) : [];
+    const invalid = Array.isArray(payload.invalid) ? payload.invalid.map((u: any) => String(u)) : [];
+    const batch = !!payload.batch;
+
+    await clearState(env.DB, userId);
+    if (!usernames.length) return sendHome(env, userId, message_id);
+
+    await processFollowUsernames(env, userId, usernames, invalid, { batch, mode: data === "m:import_confirm" ? "import" : "follow" });
+    return;
+  }
+  if (data === "m:follow_cancel" || data === "m:import_cancel") {
+    const st = await getState(env.DB, userId);
+    const batch = !!st?.data?.batch && data === "m:follow_cancel";
+    await clearState(env.DB, userId);
+    if (batch) {
+      await setState(env.DB, userId, "await_follow_username", { batch: true });
+      return tg(env, "sendMessage", { chat_id: userId, text: S(prefs.lang).sendUsername, reply_markup: cancelKeyboard(prefs.lang) });
+    }
+    return sendHome(env, userId, message_id);
   }
 
   if (data.startsWith("m:list:")) {
@@ -603,8 +745,22 @@ export async function handlePrivateMessage(env: Env, msg: any) {
     if (cmd.cmd === "/newdest") return createDestToken(env, userId);
     if (cmd.cmd === "/list") return showList(env, userId, 0);
     if (cmd.cmd === "/settings") return showSettings(env, userId);
-    if (cmd.cmd === "/follow") return handleFollowInput(env, userId, cmd.args.join(" "));
+    if (cmd.cmd === "/follow") {
+      await clearState(env.DB, userId);
+      if (cmd.args.length) return handleFollowInput(env, userId, cmd.args.join(" "), { batch: false, mode: "follow" });
+      return startFollowFlow(env, userId);
+    }
+    if (cmd.cmd === "/import") {
+      await clearState(env.DB, userId);
+      if (cmd.args.length) return handleImportInput(env, userId, cmd.args.join(" "));
+      await setState(env.DB, userId, "await_import_list");
+      return tg(env, "sendMessage", { chat_id: userId, text: S(prefs.lang).importPrompt, reply_markup: cancelKeyboard(prefs.lang) });
+    }
     if (cmd.cmd === "/cancel") {
+      await clearState(env.DB, userId);
+      return sendHome(env, userId);
+    }
+    if (cmd.cmd === "/done") {
       await clearState(env.DB, userId);
       return sendHome(env, userId);
     }
@@ -612,7 +768,16 @@ export async function handlePrivateMessage(env: Env, msg: any) {
 
   const st = await getState(env.DB, userId);
 
-  if (st?.state === "await_follow_username") return handleFollowInput(env, userId, text);
+  const forwarded = extractForwardedUsername(msg);
+  if (forwarded) {
+    const fwdText = `@${forwarded}`;
+    if (st?.state === "await_import_list") return handleImportInput(env, userId, fwdText);
+    if (st?.state === "await_follow_username") return handleFollowInput(env, userId, fwdText, { batch: !!st.data?.batch, mode: "follow" });
+    return handleFollowInput(env, userId, fwdText, { batch: false, mode: "follow" });
+  }
+
+  if (st?.state === "await_follow_username") return handleFollowInput(env, userId, text, { batch: !!st.data?.batch, mode: "follow" });
+  if (st?.state === "await_import_list") return handleImportInput(env, userId, text);
 
   if (st?.state === "await_include_keywords") {
     const u = String(st.data?.username || "");
