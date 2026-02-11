@@ -37,7 +37,7 @@ export async function ensurePrefs(db: D1Database, userId: number): Promise<UserP
       `INSERT OR IGNORE INTO user_prefs(
         user_id, lang, digest_hours, last_digest_at, realtime_enabled, updated_at,
         default_backfill_n, quiet_start, quiet_end, post_style, full_text_style
-      ) VALUES(?, 'fa', 6, 0, 1, ?, 3, -1, -1, 'rich', 'quote')`
+      ) VALUES(?, 'fa', 6, 0, 1, ?, 0, -1, -1, 'rich', 'quote')`
     )
     .bind(userId, nowSec())
     .run();
@@ -60,7 +60,7 @@ export async function ensurePrefs(db: D1Database, userId: number): Promise<UserP
     digest_hours: Number(row?.digest_hours ?? 6),
     last_digest_at: Number(row?.last_digest_at ?? 0),
     realtime_enabled: Number(row?.realtime_enabled ?? 1),
-    default_backfill_n: Number(row?.default_backfill_n ?? 3),
+    default_backfill_n: Number(row?.default_backfill_n ?? 0),
     quiet_start: Number(row?.quiet_start ?? -1),
     quiet_end: Number(row?.quiet_end ?? -1),
     post_style,
@@ -88,7 +88,7 @@ export async function setPrefs(db: D1Database, userId: number, patch: Partial<Us
       next.last_digest_at,
       next.realtime_enabled,
       nowSec(),
-      clamp(Number(next.default_backfill_n ?? 3), 0, 10),
+      clamp(Number(next.default_backfill_n ?? 0), 0, 10),
       Number(next.quiet_start ?? -1),
       Number(next.quiet_end ?? -1),
       post_style,

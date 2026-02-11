@@ -50,7 +50,7 @@ CREATE TABLE IF NOT EXISTS user_sources (
   mode TEXT NOT NULL DEFAULT 'realtime',
   include_keywords TEXT NOT NULL DEFAULT '[]',
   exclude_keywords TEXT NOT NULL DEFAULT '[]',
-  backfill_n INTEGER NOT NULL DEFAULT 3,
+  backfill_n INTEGER NOT NULL DEFAULT 0,
   label TEXT,
 
   PRIMARY KEY (user_id, username)
@@ -64,7 +64,7 @@ CREATE TABLE IF NOT EXISTS user_prefs (
   last_digest_at INTEGER NOT NULL DEFAULT 0,
   realtime_enabled INTEGER NOT NULL DEFAULT 1,
   updated_at INTEGER NOT NULL DEFAULT 0,
-  default_backfill_n INTEGER NOT NULL DEFAULT 3,
+  default_backfill_n INTEGER NOT NULL DEFAULT 0,
   quiet_start INTEGER NOT NULL DEFAULT -1,
   quiet_end INTEGER NOT NULL DEFAULT -1,
   post_style TEXT NOT NULL DEFAULT 'rich',

@@ -59,8 +59,12 @@ export function S(lang: Lang) {
       "⚠️ Set the destination first so I know where to send posts."
     ),
     sendUsername: L(
-      "نام کاربری یا لینک کانال عمومی را بفرست (کانال خصوصی پشتیبانی نمی‌شود):\nمثال: @khabarfuri یا https://t.me/khabarfuri",
-      "Send a public channel username or link (private channels aren't supported):\nExample: @khabarfuri or https://t.me/khabarfuri"
+      "نام کاربری یا لینک کانال عمومی را بفرست (می‌توانی چندتا را با فاصله یا خط جدید بفرستی؛ کانال خصوصی پشتیبانی نمی‌شود):\nمثال: @uniflyio یا https://t.me/uniflyio\nیا یک پیام از کانال را فوروارد کن تا خودکار اضافه شود.",
+      "Send a public channel username or link (you can send multiple separated by spaces or new lines; private channels aren't supported):\nExample: @uniflyio or https://t.me/uniflyio\nOr forward a message from a channel to add it automatically."
+    ),
+    importPrompt: L(
+      "لیست کانال‌ها را بفرست (هر خط یا با فاصله/کاما). مثال: @uniflyio",
+      "Paste a list of channels (one per line or separated by spaces/commas). Example: @uniflyio"
     ),
     invalidFormat: L(
       "فرمت اشتباه است. مثل @name یا لینک https://t.me/name بفرست.",
@@ -70,7 +74,17 @@ export function S(lang: Lang) {
     couldntRead: (u: string) => L(`از @${u} چیزی نتونستم بخونم. عمومی هست؟`, `Couldn’t read @${u}. Is it public?`),
 
     followed: (u: string, n: number) => L(`✅ @${u} اضافه شد. (${n} پست آخر ارسال شد)`, `✅ Followed @${u}. (Sent last ${n} posts)`),
-    followedNoRealtime: (u: string) => L(`✅ @${u} اضافه شد. (ریِل‌تایم خاموش است؛ فقط خلاصه)`, `✅ Followed @${u}. (Realtime is OFF; digest only)`),
+    followedNoRealtime: (u: string) => L(`✅ @${u} اضافه شد. (ری‌ل‌تایم خاموش است؛ فقط خلاصه)`, `✅ Followed @${u}. (Realtime is OFF; digest only)`),
+
+    followPreviewTitle: L("این کانال‌ها پیدا شد:", "Found these channels:"),
+    followSummaryTitle: (ok: number, total: number) => L(`✅ ${ok}/${total} کانال اضافه شد.`, `✅ Added ${ok}/${total}.`),
+    addedLabel: L("افزوده شد", "Added"),
+    alreadyLabel: L("قبلا اضافه شده", "Already"),
+    failedLabel: L("ناموفق", "Failed"),
+    invalidLabel: L("نامعتبر", "Invalid"),
+    followMoreHint: L("یکی دیگه بفرست یا /done", "Send another or /done"),
+    addAnother: L("➕ افزودن بیشتر", "➕ Add another"),
+    addAll: L("✅ افزودن همه", "✅ Add all"),
 
     helpText: L(
       [
@@ -81,6 +95,7 @@ export function S(lang: Lang) {
         "🚀 شروع سریع:",
         "1) کانال مقصد بساز و ربات را ادمین کن",
         "2) از «افزودن کانال» کانال‌های عمومی را اضافه کن",
+        "نکته: می‌توانی یک پیام از کانال را فوروارد کنی تا خودکار اضافه شود.",
         "3) در تنظیمات، ریِل‌تایم یا خلاصه را تنظیم کن",
         "",
         "⚡ ریِل‌تایم: هر پست جدید سریع ارسال می‌شود.",
@@ -100,6 +115,7 @@ export function S(lang: Lang) {
         "🚀 Quick start:",
         "1) Create a destination channel and add the bot as admin",
         "2) Use Add Channel to follow public channels",
+        "Tip: you can forward a channel message to add it automatically.",
         "3) In Settings, choose Realtime or Digest",
         "",
         "⚡ Realtime: each new post is sent quickly.",
@@ -218,15 +234,14 @@ export function renderHeaderLine(lang: Lang, username: string, label?: string | 
   return headerLine(lang, username, label);
 }
 
-function badgeText(lang: Lang, label?: string | null) {
-  const s = S(lang);
+function badgeText(lang: Lang, username: string, label?: string | null) {
   const clean = (label || "").toString().replace(/\s+/g, " ").trim();
-  const text = clean || s.defaultLabel;
+  const text = clean || username;
   return `🏷 ${escapeHtml(text)}`;
 }
 
 function headerLine(lang: Lang, username: string, label?: string | null) {
-  return `📰 @${escapeHtml(username)} • ${badgeText(lang, label)}`;
+  return `📰 @${escapeHtml(username)} • ${badgeText(lang, username, label)}`;
 }
 
 type RenderedMessage = { text: string; reply_markup: any };
@@ -337,6 +352,11 @@ export function backKeyboard(lang: Lang, data = "m:home") {
 export function cancelKeyboard(lang: Lang) {
   const s = S(lang);
   return { inline_keyboard: [[{ text: s.cancel, callback_data: "m:cancel" }]] };
+}
+
+export function followMoreKeyboard(lang: Lang) {
+  const s = S(lang);
+  return { inline_keyboard: [[{ text: s.addAnother, callback_data: "m:follow" }, { text: s.back, callback_data: "m:home" }]] };
 }
 
 export function homeKeyboard(lang: Lang, hasDest: boolean) {
