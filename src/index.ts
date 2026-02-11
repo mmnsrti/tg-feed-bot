@@ -81,7 +81,7 @@ export class Ticker {
 
     try {
       await ensureDbUpgrades(this.env.DB);
-      await runScrapeTick(this.env);
+      await runScrapeTick(this.env, this.state.storage);
       await this.maybePruneDeliveries();
       return { ok: true };
     } catch (e: any) {

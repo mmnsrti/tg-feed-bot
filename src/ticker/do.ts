@@ -1,7 +1,7 @@
 import { Env, MediaItem, ScrapedPost, UserPrefs } from "../types";
 import { tg, TelegramError } from "../telegram/client";
 import { renderDestinationPost, t } from "../telegram/ui";
-import { clamp, ensurePrefs, getDestination, markDestinationBad, nowSec, setPrefs } from "../db/repo";
+import { clamp, ensurePrefs, ensureSource, getDestination, markDestinationBad, nowSec, setPrefs } from "../db/repo";
 import { fetchTme, scrapeTmePreview } from "../scraper/tme";
 import { shouldStoreScrapedPosts } from "../config";
 
@@ -12,6 +12,80 @@ const MAX_POLL_SEC = 240;
 
 const MAX_FETCH_CONCURRENCY = 6;
 const MAX_SOURCES_PER_TICK = 30;
+
+type StorageLike = {
+  get<T>(key: string): Promise<T | undefined>;
+  put<T>(key: string, value: T): Promise<void>;
+};
+
+type SourceState = {
+  last_post_id: number;
+  check_every_sec: number;
+  next_check_at: number;
+  fail_count: number;
+  last_error: string | null;
+  last_error_at: number;
+  last_success_at: number;
+  updated_at: number;
+  last_db_sync_at: number;
+};
+
+const SOURCE_STATE_PREFIX = "src:";
+const SOURCE_SYNC_INTERVAL_SEC = 15 * 60;
+
+function sourceKey(username: string) {
+  return `${SOURCE_STATE_PREFIX}${username}`;
+}
+
+function buildBaseState(row: any, now: number): SourceState {
+  const checkEvery = clamp(Number(row?.check_every_sec ?? MIN_POLL_SEC), MIN_POLL_SEC, MAX_POLL_SEC);
+  const updatedAt = Number(row?.updated_at ?? 0);
+  return {
+    last_post_id: Number(row?.last_post_id ?? 0),
+    check_every_sec: checkEvery,
+    next_check_at: Number(row?.next_check_at ?? 0),
+    fail_count: Number(row?.fail_count ?? 0),
+    last_error: row?.last_error ? String(row.last_error) : null,
+    last_error_at: Number(row?.last_error_at ?? 0),
+    last_success_at: Number(row?.last_success_at ?? 0),
+    updated_at: updatedAt || now,
+    last_db_sync_at: updatedAt || 0,
+  };
+}
+
+async function getOrInitSourceState(storage: StorageLike, username: string, base: SourceState): Promise<SourceState> {
+  const key = sourceKey(username);
+  const existing = await storage.get<SourceState>(key);
+  if (existing) return existing;
+  await storage.put(key, base);
+  return base;
+}
+
+async function maybeSyncSourceToDb(env: Env, username: string, state: SourceState, now: number) {
+  if (now - state.last_db_sync_at < SOURCE_SYNC_INTERVAL_SEC) return state;
+
+  await env.DB
+    .prepare(
+      `UPDATE sources SET
+         last_post_id=?, updated_at=?, next_check_at=?, check_every_sec=?,
+         fail_count=?, last_error=?, last_error_at=?, last_success_at=?
+       WHERE username=?`
+    )
+    .bind(
+      state.last_post_id,
+      now,
+      state.next_check_at,
+      state.check_every_sec,
+      state.fail_count,
+      state.last_error,
+      state.last_error_at,
+      state.last_success_at,
+      username
+    )
+    .run();
+
+  return { ...state, last_db_sync_at: now, updated_at: now };
+}
 
 
 /** ------------------- filters ------------------- */
@@ -275,27 +349,43 @@ async function pMapLimit<T, R>(items: T[], limit: number, fn: (x: T) => Promise<
   return out;
 }
 
-export async function runScrapeTick(env: Env) {
+export async function runScrapeTick(env: Env, storage: StorageLike) {
   const storeScraped = shouldStoreScrapedPosts(env);
-  const due = await env.DB
+  const now = nowSec();
+
+  const rows = await env.DB
     .prepare(
-      `SELECT s.username, s.last_post_id, s.check_every_sec, s.fail_count
-       FROM sources s
-       JOIN (SELECT DISTINCT username FROM user_sources) u ON u.username=s.username
-       WHERE s.next_check_at <= ?
-       ORDER BY s.next_check_at ASC
-       LIMIT ?`
+      `SELECT DISTINCT us.username,
+              s.last_post_id, s.check_every_sec, s.next_check_at, s.fail_count,
+              s.last_error, s.last_error_at, s.last_success_at, s.updated_at
+       FROM user_sources us
+       LEFT JOIN sources s ON s.username = us.username`
     )
-    .bind(nowSec(), MAX_SOURCES_PER_TICK)
     .all<any>();
 
-  const dueSources = due.results || [];
+  const due: { username: string; state: SourceState }[] = [];
 
-  await pMapLimit(dueSources, MAX_FETCH_CONCURRENCY, async (row) => {
-    const username = String(row.username);
-    const lastSeen = Number(row.last_post_id ?? 0);
-    const curEvery = clamp(Number(row.check_every_sec ?? MIN_POLL_SEC), MIN_POLL_SEC, MAX_POLL_SEC);
-    const failCount = Number(row.fail_count ?? 0);
+  for (const row of rows.results || []) {
+    const username = String(row.username || "");
+    if (!username) continue;
+
+    const hasSourceRow = row.last_post_id !== null && row.check_every_sec !== null && row.next_check_at !== null;
+    if (!hasSourceRow) {
+      await ensureSource(env.DB, username, MIN_POLL_SEC);
+    }
+
+    const base = buildBaseState(row, now);
+    const state = await getOrInitSourceState(storage, username, base);
+    if (state.next_check_at <= now) due.push({ username, state });
+  }
+
+  due.sort((a, b) => a.state.next_check_at - b.state.next_check_at);
+  const dueSources = due.slice(0, MAX_SOURCES_PER_TICK);
+
+  await pMapLimit(dueSources, MAX_FETCH_CONCURRENCY, async ({ username, state }) => {
+    const lastSeen = Number(state.last_post_id ?? 0);
+    const curEvery = clamp(Number(state.check_every_sec ?? MIN_POLL_SEC), MIN_POLL_SEC, MAX_POLL_SEC);
+    const failCount = Number(state.fail_count ?? 0);
 
     try {
       const html = await fetchTme(username);
@@ -349,29 +439,37 @@ export async function runScrapeTick(env: Env) {
       const nextEvery = newPosts.length ? MIN_POLL_SEC : clamp(Math.round(curEvery * 1.6), MIN_POLL_SEC, MAX_POLL_SEC);
       const nextAt = nowSec() + nextEvery;
 
-      await env.DB
-        .prepare(
-          `UPDATE sources SET
-             last_post_id=?, updated_at=?, next_check_at=?, check_every_sec=?,
-             fail_count=0, last_error=NULL, last_error_at=0, last_success_at=?
-           WHERE username=?`
-        )
-        .bind(maxId, nowSec(), nextAt, nextEvery, nowSec(), username)
-        .run();
+      let nextState: SourceState = {
+        ...state,
+        last_post_id: maxId,
+        check_every_sec: nextEvery,
+        next_check_at: nextAt,
+        fail_count: 0,
+        last_error: null,
+        last_error_at: 0,
+        last_success_at: nowSec(),
+        updated_at: nowSec(),
+      };
+
+      nextState = await maybeSyncSourceToDb(env, username, nextState, nowSec());
+      await storage.put(sourceKey(username), nextState);
     } catch (e: any) {
       const msg = String(e?.message || e);
       const nextEvery = clamp(Math.round(curEvery * 2), MIN_POLL_SEC, MAX_POLL_SEC);
       const nextAt = nowSec() + nextEvery;
 
-      await env.DB
-        .prepare(
-          `UPDATE sources SET
-             updated_at=?, next_check_at=?, check_every_sec=?,
-             fail_count=?, last_error=?, last_error_at=?
-           WHERE username=?`
-        )
-        .bind(nowSec(), nextAt, nextEvery, failCount + 1, msg.slice(0, 250), nowSec(), username)
-        .run();
+      let nextState: SourceState = {
+        ...state,
+        check_every_sec: nextEvery,
+        next_check_at: nextAt,
+        fail_count: failCount + 1,
+        last_error: msg.slice(0, 250),
+        last_error_at: nowSec(),
+        updated_at: nowSec(),
+      };
+
+      nextState = await maybeSyncSourceToDb(env, username, nextState, nowSec());
+      await storage.put(sourceKey(username), nextState);
     }
   });
 
