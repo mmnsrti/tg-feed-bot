@@ -13,8 +13,6 @@ const MAX_POLL_SEC = 240;
 const MAX_FETCH_CONCURRENCY = 6;
 const MAX_SOURCES_PER_TICK = 30;
 
-const LOCK_NAME = "scrape_tick";
-const LOCK_TTL_SEC = 25;
 
 /** ------------------- filters ------------------- */
 function safeParseKeywords(raw: any): string[] {
@@ -262,26 +260,6 @@ export async function sendDigestForUser(env: Env, userId: number, force = false)
   await setPrefs(env.DB, userId, { last_digest_at: nowSec() });
 }
 
-/** ------------------- locks ------------------- */
-async function acquireTickLock(db: D1Database): Promise<boolean> {
-  const now = nowSec();
-  const ins = await db.prepare("INSERT OR IGNORE INTO locks(name, acquired_at) VALUES(?, ?)").bind(LOCK_NAME, now).run();
-  if ((ins as any)?.meta?.changes === 1) return true;
-
-  const row = await db.prepare("SELECT acquired_at FROM locks WHERE name=?").bind(LOCK_NAME).first<any>();
-  const acquiredAt = Number(row?.acquired_at ?? 0);
-
-  if (!acquiredAt || now - acquiredAt > LOCK_TTL_SEC) {
-    const upd = await db.prepare("UPDATE locks SET acquired_at=? WHERE name=? AND acquired_at=?").bind(now, LOCK_NAME, acquiredAt).run();
-    if ((upd as any)?.meta?.changes === 1) return true;
-  }
-  return false;
-}
-
-async function releaseTickLock(db: D1Database) {
-  await db.prepare("DELETE FROM locks WHERE name=?").bind(LOCK_NAME).run();
-}
-
 /** ------------------- tick work ------------------- */
 async function pMapLimit<T, R>(items: T[], limit: number, fn: (x: T) => Promise<R>): Promise<R[]> {
   const out: R[] = [];
@@ -412,12 +390,4 @@ export async function runScrapeTick(env: Env) {
   }
 }
 
-export async function runScrapeTickLocked(env: Env) {
-  const got = await acquireTickLock(env.DB);
-  if (!got) return;
-  try {
-    await runScrapeTick(env);
-  } finally {
-    await releaseTickLock(env.DB);
-  }
-}
+// NOTE: locking is handled by Durable Object storage in src/index.ts

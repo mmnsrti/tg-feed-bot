@@ -4,11 +4,16 @@ import { Hono } from "hono";
 import { Env, TgUpdate } from "./types";
 import { ensureDbUpgrades } from "./db/schema";
 import { handleCallback, handleChannelPost, handlePrivateMessage } from "./telegram/handlers";
-import { runScrapeTickLocked } from "./ticker/do";
+import { runScrapeTick } from "./ticker/do";
 
 const app = new Hono<{ Bindings: Env }>();
 
 const TICK_MS = 5000;
+const LOCK_KEY = "scrape_lock";
+const LOCK_TTL_MS = 25_000;
+const PRUNE_KEY = "deliveries_prune_at";
+const PRUNE_INTERVAL_SEC = 6 * 3600;
+const DELIVERY_TTL_DAYS = 14;
 
 async function processUpdate(env: Env, update: TgUpdate) {
   await ensureDbUpgrades(env.DB);
@@ -42,6 +47,50 @@ export class Ticker {
     this.env = env;
   }
 
+  private async acquireScrapeLock(): Promise<boolean> {
+    const now = Date.now();
+    const cur = (await this.state.storage.get<number>(LOCK_KEY)) || 0;
+    if (!cur || now - cur > LOCK_TTL_MS) {
+      await this.state.storage.put(LOCK_KEY, now);
+      return true;
+    }
+    return false;
+  }
+
+  private async releaseScrapeLock() {
+    await this.state.storage.delete(LOCK_KEY);
+  }
+
+  private async maybePruneDeliveries() {
+    const now = Math.floor(Date.now() / 1000);
+    const last = (await this.state.storage.get<number>(PRUNE_KEY)) || 0;
+    if (now - last < PRUNE_INTERVAL_SEC) return;
+
+    const cutoff = now - DELIVERY_TTL_DAYS * 86400;
+    try {
+      await this.env.DB.prepare("DELETE FROM deliveries WHERE created_at < ?").bind(cutoff).run();
+      await this.state.storage.put(PRUNE_KEY, now);
+    } catch (e) {
+      console.log("deliveries prune error:", String(e));
+    }
+  }
+
+  private async runScrapeOnce(): Promise<{ ok: boolean; busy?: boolean; error?: string }> {
+    const got = await this.acquireScrapeLock();
+    if (!got) return { ok: false, busy: true };
+
+    try {
+      await ensureDbUpgrades(this.env.DB);
+      await runScrapeTick(this.env);
+      await this.maybePruneDeliveries();
+      return { ok: true };
+    } catch (e: any) {
+      return { ok: false, error: String(e) };
+    } finally {
+      await this.releaseScrapeLock();
+    }
+  }
+
   async fetch(request: Request) {
     const url = new URL(request.url);
 
@@ -61,13 +110,18 @@ export class Ticker {
       return new Response(JSON.stringify({ alarm }), { headers: { "content-type": "application/json" } });
     }
 
+    if (url.pathname === "/run-scrape" && request.method === "POST") {
+      const result = await this.runScrapeOnce();
+      const status = result.ok ? 200 : result.busy ? 409 : 500;
+      return new Response(JSON.stringify(result), { status, headers: { "content-type": "application/json" } });
+    }
+
     return new Response("not found", { status: 404 });
   }
 
   async alarm() {
     try {
-      await ensureDbUpgrades(this.env.DB);
-      await runScrapeTickLocked(this.env);
+      await this.runScrapeOnce();
     } catch (e) {
       console.log("ticker alarm error:", String(e));
     } finally {
@@ -105,9 +159,10 @@ app.post("/telegram", async (c) => {
 
 app.post("/admin/run-scrape", async (c) => {
   if (!checkAdmin(c)) return c.text("forbidden", 403);
-  await ensureDbUpgrades(c.env.DB);
-  await runScrapeTickLocked(c.env);
-  return c.json({ ok: true });
+  const id = c.env.TICKER.idFromName("global");
+  const stub = c.env.TICKER.get(id);
+  const res = await stub.fetch("https://ticker/run-scrape", { method: "POST" });
+  return new Response(await res.text(), { status: res.status, headers: { "content-type": "application/json" } });
 });
 
 app.post("/admin/ticker/start", async (c) => {
