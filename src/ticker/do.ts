@@ -169,15 +169,18 @@ function isDestinationAccessError(err: TelegramError) {
 
 async function sendFeedPost(env: Env, destChatId: number, prefs: UserPrefs, username: string, label: string | null, post: ScrapedPost) {
   const link = post.link || `https://t.me/${username}/${post.postId}`;
-  const rendered = renderDestinationPost(prefs.post_style, prefs.lang, username, label, post.text, link, nowSec(), {
+  const rendered = renderDestinationPost(prefs.post_style, prefs.lang, username, label, post.text, link, {
     fullTextStyle: prefs.full_text_style,
   });
+  const hasMedia = Array.isArray(post.media) && post.media.length > 0;
 
   await tg(env, "sendMessage", {
     chat_id: destChatId,
     text: rendered.text,
     parse_mode: "HTML",
     reply_markup: rendered.reply_markup,
+    // Show previews only when the post has media; hide preview for text-only posts.
+    disable_web_page_preview: !hasMedia,
   });
 }
 

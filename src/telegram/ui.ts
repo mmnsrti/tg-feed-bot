@@ -267,7 +267,7 @@ export function postButtons(lang: Lang, username: string, link: string) {
   };
 }
 
-// Pure renderer: (lang, channelUsername, channelLabel, postText, postLink, time)
+// Pure renderer: (lang, channelUsername, channelLabel, postText, postLink)
 export function renderCompactPost(
   lang: Lang,
   channelUsername: string,
@@ -290,7 +290,7 @@ export function renderCompactPost(
   return { text: lines.join("\n"), reply_markup: postButtons(lang, channelUsername, postLink) };
 }
 
-// Pure renderer: (lang, channelUsername, channelLabel, postText, postLink, time)
+// Pure renderer: (lang, channelUsername, channelLabel, postText, postLink)
 export function renderRichPost(
   lang: Lang,
   channelUsername: string,
@@ -329,12 +329,11 @@ export function renderDestinationPost(
   channelLabel: string | null,
   postText: string,
   postLink: string,
-  timeSec?: number,
   opts?: { includeHeader?: boolean; fullTextStyle?: FullTextStyle }
 ): RenderedMessage {
   return style === "compact"
-    ? renderCompactPost(lang, channelUsername, channelLabel, postText, postLink, timeSec, opts)
-    : renderRichPost(lang, channelUsername, channelLabel, postText, postLink, timeSec, opts);
+    ? renderCompactPost(lang, channelUsername, channelLabel, postText, postLink, opts)
+    : renderRichPost(lang, channelUsername, channelLabel, postText, postLink, opts);
 }
 
 /** ------------------- keyboards ------------------- */
