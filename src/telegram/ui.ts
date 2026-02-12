@@ -24,6 +24,13 @@ export function S(lang: Lang) {
     destVerified: L("تأیید شده", "Verified"),
 
     setDest: L("🎯 تنظیم کانال مقصد", "🎯 Set Destination"),
+    manageDest: L("🎯 مدیریت مقصد", "🎯 Manage Destination"),
+    destChange: L("♻️ تغییر مقصد", "♻️ Change Destination"),
+    destDelete: L("🗑 حذف مقصد", "🗑 Delete Destination"),
+    destManageTitle: L("🎯 مقصد تنظیم شده است", "🎯 Destination is already set"),
+    destManageHint: L("یکی را انتخاب کن:", "Choose one:"),
+    destCurrent: (chatId: number) => L(`شناسه مقصد فعلی: ${chatId}`, `Current destination ID: ${chatId}`),
+    destDeleted: L("✅ مقصد حذف شد.", "✅ Destination deleted."),
     addChannel: L("➕ افزودن کانال", "➕ Add Channel"),
     myChannels: L("📋 کانال‌های من", "📋 My Channels"),
     settings: L("⚙️ تنظیمات", "⚙️ Settings"),
@@ -356,7 +363,7 @@ export function homeKeyboard(lang: Lang, hasDest: boolean) {
   const s = S(lang);
   const rows: any[] = [];
 
-  if (!hasDest) rows.push([{ text: s.setDest, callback_data: "m:newdest" }]);
+  rows.push([{ text: hasDest ? s.manageDest : s.setDest, callback_data: "m:newdest" }]);
 
   rows.push([
     { text: s.addChannel, callback_data: "m:follow" },
@@ -370,11 +377,13 @@ export function homeKeyboard(lang: Lang, hasDest: boolean) {
   return { inline_keyboard: rows };
 }
 
-export function settingsKeyboard(lang: Lang, prefs: UserPrefs, hasDest: boolean) {
+export function settingsKeyboard(lang: Lang, prefs: UserPrefs, hasDest: boolean, canTest = hasDest) {
   const s = S(lang);
   const styleName = prefs.post_style === "compact" ? s.styleCompact : s.styleRich;
   const fullStyleName = prefs.full_text_style === "plain" ? s.stylePlain : s.styleQuote;
   const rows: any[] = [];
+
+  rows.push([{ text: hasDest ? s.manageDest : s.setDest, callback_data: "m:newdest" }]);
 
   rows.push([
     { text: s.language, callback_data: "set:lang" },
@@ -387,7 +396,7 @@ export function settingsKeyboard(lang: Lang, prefs: UserPrefs, hasDest: boolean)
   rows.push([{ text: s.quiet, callback_data: "set:quiet" }]);
   rows.push([{ text: s.defaultBackfill, callback_data: "set:dbf" }]);
 
-  if (hasDest) rows.push([{ text: s.testDelivery, callback_data: "set:test" }]);
+  if (canTest) rows.push([{ text: s.testDelivery, callback_data: "set:test" }]);
 
   rows.push([{ text: s.back, callback_data: "m:home" }]);
   return { inline_keyboard: rows };
@@ -405,6 +414,17 @@ export function channelKeyboard(lang: Lang, u: string, paused: number, mode: str
       [{ text: s.filters, callback_data: `f:menu:${u}` }, { text: s.backfill, callback_data: `bf:menu:${u}` }],
       [{ text: s.unfollow, callback_data: `c:unfollow:${u}` }],
       [{ text: s.back, callback_data: "m:list:0" }],
+    ],
+  };
+}
+
+export function destinationManageKeyboard(lang: Lang) {
+  const s = S(lang);
+  return {
+    inline_keyboard: [
+      [{ text: s.destChange, callback_data: "m:dest:change" }],
+      [{ text: s.destDelete, callback_data: "m:dest:delete" }],
+      [{ text: s.back, callback_data: "m:home" }],
     ],
   };
 }

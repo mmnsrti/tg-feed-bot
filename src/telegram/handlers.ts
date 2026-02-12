@@ -1,8 +1,9 @@
 ﻿import { Env, Lang, ScrapedPost, UserPrefs } from "../types";
 import { tg } from "./client";
-import { S, backKeyboard, backfillKeyboard, cancelKeyboard, channelKeyboard, filtersKeyboard, followMoreKeyboard, homeKeyboard, settingsKeyboard } from "./ui";
+import { S, backKeyboard, backfillKeyboard, cancelKeyboard, channelKeyboard, destinationManageKeyboard, filtersKeyboard, followMoreKeyboard, homeKeyboard, settingsKeyboard } from "./ui";
 import {
   addUserSource,
+  clearDestination,
   clearState,
   clamp,
   countUserSources,
@@ -175,13 +176,13 @@ async function sendHome(env: Env, userId: number, message_id?: number) {
     s.homeHint,
   ].join("\n");
 
-  await sendOrEdit(env, { chat_id: userId, message_id, text, reply_markup: homeKeyboard(prefs.lang, !!dest?.verified) });
+  await sendOrEdit(env, { chat_id: userId, message_id, text, reply_markup: homeKeyboard(prefs.lang, !!dest) });
 }
 
 async function showHelp(env: Env, userId: number, message_id?: number) {
   const prefs = await ensurePrefs(env.DB, userId);
   const dest = await getDestination(env.DB, userId);
-  await sendOrEdit(env, { chat_id: userId, message_id, text: S(prefs.lang).helpText, reply_markup: homeKeyboard(prefs.lang, !!dest?.verified) });
+  await sendOrEdit(env, { chat_id: userId, message_id, text: S(prefs.lang).helpText, reply_markup: homeKeyboard(prefs.lang, !!dest) });
 }
 
 async function showSettings(env: Env, userId: number, message_id?: number) {
@@ -204,7 +205,20 @@ async function showSettings(env: Env, userId: number, message_id?: number) {
     `${s.fullTextStyle}: ${fullStyleName}`,
   ].join("\n");
 
-  await sendOrEdit(env, { chat_id: userId, message_id, text, reply_markup: settingsKeyboard(prefs.lang, prefs, !!dest?.verified) });
+  await sendOrEdit(env, { chat_id: userId, message_id, text, reply_markup: settingsKeyboard(prefs.lang, prefs, !!dest, !!dest?.verified) });
+}
+
+async function startDestinationFlow(env: Env, userId: number, message_id?: number) {
+  const prefs = await ensurePrefs(env.DB, userId);
+  const s = S(prefs.lang);
+  const dest = await getDestination(env.DB, userId);
+
+  if (!dest) return createDestToken(env, userId, message_id);
+
+  const status = dest.verified ? s.destVerified : s.destNotVerified;
+  const text = [s.destManageTitle, "", `${s.destinationLabel}: ${status}`, s.destCurrent(Number(dest.chat_id)), "", s.destManageHint].join("\n");
+
+  await sendOrEdit(env, { chat_id: userId, message_id, text, reply_markup: destinationManageKeyboard(prefs.lang) });
 }
 
 async function createDestToken(env: Env, userId: number, message_id?: number) {
@@ -232,7 +246,7 @@ async function startFollowFlow(env: Env, userId: number) {
 
   if (!dest?.verified) {
     await clearState(env.DB, userId);
-    await tg(env, "sendMessage", { chat_id: userId, text: s.needDestFirst, reply_markup: homeKeyboard(prefs.lang, false) });
+    await tg(env, "sendMessage", { chat_id: userId, text: s.needDestFirst, reply_markup: homeKeyboard(prefs.lang, !!dest) });
     return;
   }
 
@@ -251,11 +265,12 @@ async function showList(env: Env, userId: number, page: number, message_id?: num
 
   if (!list.length) {
     await clearState(env.DB, userId);
+    const dest = await getDestination(env.DB, userId);
     await sendOrEdit(env, {
       chat_id: userId,
       message_id,
       text: `${s.myChannels}\n\n${s.listEmpty}`,
-      reply_markup: homeKeyboard(prefs.lang, true),
+      reply_markup: homeKeyboard(prefs.lang, !!dest),
     });
     return;
   }
@@ -427,7 +442,7 @@ async function processFollowUsernames(env: Env, userId: number, usernames: strin
 
   if (!dest?.verified) {
     await clearState(env.DB, userId);
-    await tg(env, "sendMessage", { chat_id: userId, text: s.needDestFirst, reply_markup: homeKeyboard(prefs.lang, false) });
+    await tg(env, "sendMessage", { chat_id: userId, text: s.needDestFirst, reply_markup: homeKeyboard(prefs.lang, !!dest) });
     return;
   }
 
@@ -564,7 +579,17 @@ export async function handleCallback(env: Env, cq: any) {
 
   if (data === "m:newdest") {
     await clearState(env.DB, userId);
+    return startDestinationFlow(env, userId, message_id);
+  }
+  if (data === "m:dest:change") {
+    await clearState(env.DB, userId);
     return createDestToken(env, userId, message_id);
+  }
+  if (data === "m:dest:delete") {
+    await clearState(env.DB, userId);
+    await clearDestination(env.DB, userId);
+    await tg(env, "sendMessage", { chat_id: userId, text: S(prefs.lang).destDeleted });
+    return sendHome(env, userId, message_id);
   }
   if (data === "m:follow") {
     await clearState(env.DB, userId);
@@ -742,7 +767,14 @@ export async function handlePrivateMessage(env: Env, msg: any) {
       return sendHome(env, userId);
     }
     if (cmd.cmd === "/help") return showHelp(env, userId);
-    if (cmd.cmd === "/newdest") return createDestToken(env, userId);
+    if (cmd.cmd === "/newdest") {
+      await clearState(env.DB, userId);
+      return startDestinationFlow(env, userId);
+    }
+    if (cmd.cmd === "/changedest") {
+      await clearState(env.DB, userId);
+      return createDestToken(env, userId);
+    }
     if (cmd.cmd === "/list") return showList(env, userId, 0);
     if (cmd.cmd === "/settings") return showSettings(env, userId);
     if (cmd.cmd === "/follow") {
