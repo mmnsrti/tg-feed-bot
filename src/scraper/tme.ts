@@ -46,14 +46,18 @@ function extractMedia(htmlSlice: string): MediaItem[] {
   const videos: string[] = [];
   const docs: string[] = [];
 
-  const reBg = /background-image\s*:\s*url\(['"]([^'"]+)['"]\)/gi;
+  // Only capture backgrounds from message media blocks (not avatars/userpics).
+  const rePhotoWrapBg =
+    /<[^>]*class="[^"]*tgme_widget_message_(?:photo_wrap|video_thumb|grouped)[^"]*"[^>]*style="[^"]*background-image\s*:\s*url\(['"]([^'"]+)['"]\)[^"]*"[^>]*>/gi;
   let m: RegExpExecArray | null;
-  while ((m = reBg.exec(htmlSlice)) !== null) {
+  while ((m = rePhotoWrapBg.exec(htmlSlice)) !== null) {
     const u = normalizeUrl(m[1]);
     if (!isEmojiAssetUrl(u)) photos.push(u);
   }
 
-  const reImg = /<img[^>]+src="([^"]+)"/gi;
+  // Keep <img> capture limited to message text/media containers.
+  const reImg =
+    /<img[^>]+class="[^"]*tgme_widget_message_[^"]*"[^>]+src="([^"]+)"/gi;
   while ((m = reImg.exec(htmlSlice)) !== null) {
     const u = normalizeUrl(m[1]);
     if (!isEmojiAssetUrl(u)) photos.push(u);
@@ -119,17 +123,23 @@ export function scrapeTmePreview(username: string, html: string): ScrapedPost[] 
   const posts: ScrapedPost[] = [];
 
   const re = /data-post="([^"\/]+)\/(\d+)"/g;
+  const markers: { index: number; chan: string; postId: number }[] = [];
   let m: RegExpExecArray | null;
 
   while ((m = re.exec(html)) !== null) {
     const chan = m[1].toLowerCase();
-    if (chan !== wanted) continue;
-
     const postId = Number(m[2]);
     if (!Number.isFinite(postId)) continue;
+    markers.push({ index: m.index, chan, postId });
+  }
 
-    const start = m.index;
-    const slice = html.slice(start, start + 80000);
+  for (let i = 0; i < markers.length; i++) {
+    const cur = markers[i];
+    if (cur.chan !== wanted) continue;
+
+    const start = cur.index;
+    const nextStart = i + 1 < markers.length ? markers[i + 1].index : html.length;
+    const slice = html.slice(start, nextStart);
 
     const textMatch =
       /<div class="tgme_widget_message_text[^"]*">([\s\S]*?)<\/div>/.exec(slice) ||
@@ -140,10 +150,19 @@ export function scrapeTmePreview(username: string, html: string): ScrapedPost[] 
 
     const media = extractMedia(slice);
 
-    posts.push({ postId, text, media, link: `https://t.me/${username}/${postId}` });
+    posts.push({ postId: cur.postId, text, media, link: `https://t.me/${username}/${cur.postId}` });
   }
 
+  const score = (p: ScrapedPost) => {
+    const textScore = (p.text || "").trim().length;
+    const mediaScore = (p.media?.length || 0) * 1000;
+    return mediaScore + textScore;
+  };
+
   const uniq = new Map<number, ScrapedPost>();
-  for (const p of posts) uniq.set(p.postId, p);
+  for (const p of posts) {
+    const prev = uniq.get(p.postId);
+    if (!prev || score(p) > score(prev)) uniq.set(p.postId, p);
+  }
   return [...uniq.values()].sort((a, b) => a.postId - b.postId);
 }
