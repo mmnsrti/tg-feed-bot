@@ -30,6 +30,11 @@ export async function markDestinationBad(db: D1Database, userId: number) {
   await db.prepare("UPDATE destinations SET verified=0 WHERE user_id=?").bind(userId).run();
 }
 
+export async function clearDestination(db: D1Database, userId: number) {
+  await db.prepare("DELETE FROM destinations WHERE user_id=?").bind(userId).run();
+  await db.prepare("DELETE FROM pending_claims WHERE user_id=? AND kind='dest'").bind(userId).run();
+}
+
 /** ------------------- prefs ------------------- */
 export async function ensurePrefs(db: D1Database, userId: number): Promise<UserPrefs> {
   await db
