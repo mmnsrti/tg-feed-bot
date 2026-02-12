@@ -5,6 +5,7 @@ import { Env, TgUpdate } from "./types";
 import { ensureDbUpgrades } from "./db/schema";
 import { handleCallback, handleChannelPost, handlePrivateMessage } from "./telegram/handlers";
 import { runScrapeTick } from "./ticker/do";
+import { buildAdminStats, renderAdminStatsPage } from "./admin/stats";
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -139,8 +140,9 @@ function checkAdmin(c: any) {
   if (!expected) return false;
   const auth = c.req.header("Authorization") || "";
   const xkey = c.req.header("X-Admin-Key") || "";
+  const qkey = c.req.query("key") || "";
   if (auth.startsWith("Bearer ")) return auth.slice(7) === expected;
-  return xkey === expected;
+  return xkey === expected || qkey === expected;
 }
 
 /** ------------------- routes ------------------- */
@@ -155,6 +157,18 @@ app.post("/telegram", async (c) => {
   const update = await c.req.json<TgUpdate>();
   c.executionCtx.waitUntil(processUpdate(c.env, update));
   return c.json({ ok: true });
+});
+
+app.get("/admin/stats", async (c) => {
+  if (!checkAdmin(c)) return c.text("forbidden", 403);
+  return c.html(renderAdminStatsPage(c.req.query("key") || ""));
+});
+
+app.get("/admin/stats.json", async (c) => {
+  if (!checkAdmin(c)) return c.text("forbidden", 403);
+  await ensureDbUpgrades(c.env.DB);
+  const stats = await buildAdminStats(c.env);
+  return c.json(stats);
 });
 
 app.post("/admin/run-scrape", async (c) => {
