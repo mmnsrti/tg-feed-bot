@@ -179,8 +179,8 @@ async function sendFeedPost(env: Env, destChatId: number, prefs: UserPrefs, user
     text: rendered.text,
     parse_mode: "HTML",
     reply_markup: rendered.reply_markup,
-    // Show previews only when the post has media; hide preview for text-only posts.
-    disable_web_page_preview: !hasMedia,
+    // Keep preview hidden for text-only posts; place media previews above text when present.
+    link_preview_options: hasMedia ? { is_disabled: false, show_above_text: true, url: link } : { is_disabled: true },
   });
 }
 

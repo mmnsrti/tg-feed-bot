@@ -226,6 +226,10 @@ function escapeHtml(s: string) {
   return (s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
+function escapeAttr(s: string) {
+  return escapeHtml(s).replace(/"/g, "&quot;");
+}
+
 function truncateText(s: string, max: number) {
   const t = (s || "").trim();
   if (t.length <= max) return t;
@@ -241,36 +245,34 @@ export function renderHeaderLine(lang: Lang, username: string, label?: string | 
   return headerLine(lang, username, label);
 }
 
-function badgeText(lang: Lang, username: string, label?: string | null) {
+function badgeText(username: string, label?: string | null) {
   const clean = (label || "").toString().replace(/\s+/g, " ").trim();
   const text = clean || username;
   return `🏷 ${escapeHtml(text)}`;
 }
 
 function headerLine(lang: Lang, username: string, label?: string | null) {
-  return `📰 @${escapeHtml(username)} • ${badgeText(lang, username, label)}`;
+  return `📰 @${escapeHtml(username)} • ${badgeText(username, label)}`;
+}
+
+function headerLineWithPostLink(username: string, label: string | null, postLink: string) {
+  const cleanLabel = (label || "").toString().replace(/\s+/g, " ").trim();
+  const shownLabel = cleanLabel || username;
+  const labelPart = `<a href="${escapeAttr(postLink)}">🏷 ${escapeHtml(shownLabel)}</a>`;
+  return `📰 ${labelPart}`;
 }
 
 type RenderedMessage = { text: string; reply_markup: any };
 
-const BRAND_URL = "https://t.me/uniflyio";
-const BRAND_HANDLE = "@uniflyio";
-
-function footerLinks(lang: Lang, postLink: string) {
-  const s = S(lang);
-  const a = `<a href="${postLink}">${escapeHtml(s.linkOriginal)}</a>`;
-  const brand = `<i>Follow <a href="${BRAND_URL}">${escapeHtml(BRAND_HANDLE)}</a></i>`;
-  return `${a}\n\n${brand}`;
-}
-
-export function postButtons(lang: Lang, username: string, link: string) {
-  const s = S(lang);
+export function postButtons(_lang: Lang, username: string, _link: string, channelLabel: string | null) {
+  const cleanLabel = (channelLabel || "").toString().replace(/\s+/g, " ").trim();
+  const channelName = cleanLabel || `@${username}`;
   return {
     inline_keyboard: [
       [
-        { text: s.openOriginal, url: link },
-        { text: s.openChannel, url: `https://t.me/${username}` },
-      ], ],
+        { text: channelName, url: `https://t.me/${username}` },
+      ],
+    ],
   };
 }
 
@@ -284,7 +286,7 @@ export function renderCompactPost(
   opts?: { includeHeader?: boolean }
 ): RenderedMessage {
   const s = S(lang);
-  const header = headerLine(lang, channelUsername, channelLabel);
+  const header = headerLineWithPostLink(channelUsername, channelLabel, postLink);
   const raw = (postText || "").trim();
   const snippetSource = raw || s.noText;
   const snippet = truncateText(oneLine(snippetSource), 160);
@@ -292,9 +294,8 @@ export function renderCompactPost(
 
   const includeHeader = opts?.includeHeader !== false;
   const lines = includeHeader ? [header, safeSnippet] : [safeSnippet];
-  lines.push(footerLinks(lang, postLink));
 
-  return { text: lines.join("\n"), reply_markup: postButtons(lang, channelUsername, postLink) };
+  return { text: lines.join("\n"), reply_markup: postButtons(lang, channelUsername, postLink, channelLabel) };
 }
 
 // Pure renderer: (lang, channelUsername, channelLabel, postText, postLink)
@@ -307,26 +308,18 @@ export function renderRichPost(
   opts?: { includeHeader?: boolean; fullTextStyle?: FullTextStyle }
 ): RenderedMessage {
   const s = S(lang);
-  const header = headerLine(lang, channelUsername, channelLabel);
+  const header = headerLineWithPostLink(channelUsername, channelLabel, postLink);
 
   const raw = (postText || "").trim() || s.noText;
   const isLong = oneLine(raw).length > 450;
   const full = isLong ? truncateText(raw, 1800) : raw;
 
-  let body = "";
-  if (opts?.fullTextStyle === "plain") {
-    body = escapeHtml(full);
-  } else if (isLong) {
-    body = `<blockquote expandable>${escapeHtml(full)}</blockquote>`;
-  } else {
-    body = `<blockquote>${escapeHtml(full)}</blockquote>`;
-  }
+  const body = escapeHtml(full);
 
   const includeHeader = opts?.includeHeader !== false;
   const parts = includeHeader ? [header, body] : [body];
-  parts.push(footerLinks(lang, postLink));
 
-  return { text: parts.join("\n\n"), reply_markup: postButtons(lang, channelUsername, postLink) };
+  return { text: parts.join("\n"), reply_markup: postButtons(lang, channelUsername, postLink, channelLabel) };
 }
 
 export function renderDestinationPost(
