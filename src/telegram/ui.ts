@@ -226,6 +226,10 @@ function escapeHtml(s: string) {
   return (s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
+function escapeRegExp(s: string) {
+  return (s || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 function escapeAttr(s: string) {
   return escapeHtml(s).replace(/"/g, "&quot;");
 }
@@ -239,6 +243,32 @@ function truncateText(s: string, max: number) {
 
 function oneLine(s: string) {
   return (s || "").replace(/\s+/g, " ").trim();
+}
+
+function stripSelfChannelLinks(text: string, username: string) {
+  const cleanUser = (username || "").toString().replace(/^@+/, "").trim();
+  if (!cleanUser) return (text || "").toString();
+
+  const u = escapeRegExp(cleanUser);
+  const patterns = [
+    new RegExp(`(?:https?:\\/\\/)?(?:www\\.)?t\\.me\\/${u}(?:\\/[^\\s]*)?`, "gi"),
+    new RegExp(`(?:https?:\\/\\/)?(?:www\\.)?telegram\\.me\\/${u}(?:\\/[^\\s]*)?`, "gi"),
+  ];
+
+  let out = (text || "").toString();
+  for (const re of patterns) out = out.replace(re, "");
+  // Remove stand-alone lines like: "@channel" or "💭@channel"
+  out = out.replace(new RegExp(`^\\s*(?:[^\\w\\s]{0,4}\\s*)?@${u}\\s*$`, "gim"), "");
+  // Remove inline mentions of the same channel too.
+  out = out.replace(new RegExp(`(^|[^\\w@])@${u}(?=$|[^\\w])`, "gim"), "$1");
+
+  return out
+    .replace(/\(\s*\)/g, "")
+    .split("\n")
+    .map((line) => line.replace(/[ \t]{2,}/g, " ").trimEnd())
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 export function renderHeaderLine(lang: Lang, username: string, label?: string | null) {
@@ -255,22 +285,22 @@ function headerLine(lang: Lang, username: string, label?: string | null) {
   return `📰 @${escapeHtml(username)} • ${badgeText(username, label)}`;
 }
 
-function headerLineWithPostLink(username: string, label: string | null, postLink: string) {
+function headerLineWithChannelLink(username: string, label: string | null) {
   const cleanLabel = (label || "").toString().replace(/\s+/g, " ").trim();
   const shownLabel = cleanLabel || username;
-  const labelPart = `<a href="${escapeAttr(postLink)}">🏷 ${escapeHtml(shownLabel)}</a>`;
+  const labelPart = `<a href="${escapeAttr(`https://t.me/${username}`)}">🏷 ${escapeHtml(shownLabel)}</a>`;
   return `📰 ${labelPart}`;
 }
 
 type RenderedMessage = { text: string; reply_markup: any };
 
-export function postButtons(_lang: Lang, username: string, _link: string, channelLabel: string | null) {
+export function postButtons(_lang: Lang, username: string, link: string, channelLabel: string | null) {
   const cleanLabel = (channelLabel || "").toString().replace(/\s+/g, " ").trim();
   const channelName = cleanLabel || `@${username}`;
   return {
     inline_keyboard: [
       [
-        { text: channelName, url: `https://t.me/${username}` },
+        { text: channelName, url: link },
       ],
     ],
   };
@@ -286,8 +316,8 @@ export function renderCompactPost(
   opts?: { includeHeader?: boolean }
 ): RenderedMessage {
   const s = S(lang);
-  const header = headerLineWithPostLink(channelUsername, channelLabel, postLink);
-  const raw = (postText || "").trim();
+  const header = headerLineWithChannelLink(channelUsername, channelLabel);
+  const raw = stripSelfChannelLinks(postText, channelUsername).trim();
   const snippetSource = raw || s.noText;
   const snippet = truncateText(oneLine(snippetSource), 160);
   const safeSnippet = escapeHtml(snippet);
@@ -308,9 +338,9 @@ export function renderRichPost(
   opts?: { includeHeader?: boolean; fullTextStyle?: FullTextStyle }
 ): RenderedMessage {
   const s = S(lang);
-  const header = headerLineWithPostLink(channelUsername, channelLabel, postLink);
+  const header = headerLineWithChannelLink(channelUsername, channelLabel);
 
-  const raw = (postText || "").trim() || s.noText;
+  const raw = stripSelfChannelLinks(postText, channelUsername).trim() || s.noText;
   const isLong = oneLine(raw).length > 450;
   const full = isLong ? truncateText(raw, 1800) : raw;
 
