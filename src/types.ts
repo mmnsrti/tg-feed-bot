@@ -16,7 +16,7 @@ export type PostStyle = "compact" | "rich";
 export type FullTextStyle = "quote" | "plain";
 export type ChannelMode = "realtime" | "digest";
 
-export type MediaKind = "photo" | "video" | "document";
+export type MediaKind = string;
 export type MediaItem = { kind: MediaKind; url: string };
 
 export type ScrapedPost = {
