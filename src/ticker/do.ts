@@ -140,11 +140,11 @@ function safeParseMediaJson(raw: any): MediaItem[] {
     if (!Array.isArray(arr)) return [];
     const out: MediaItem[] = [];
     for (const it of arr) {
-      const kind = String(it?.kind || "");
+      const kind = String(it?.kind || "document").trim().toLowerCase();
       const url = String(it?.url || "");
-      if ((kind === "photo" || kind === "video" || kind === "document") && url) out.push({ kind, url } as MediaItem);
+      if (url) out.push({ kind: kind || "document", url });
     }
-    return out.slice(0, 10);
+    return out;
   } catch {
     return [];
   }
@@ -167,20 +167,180 @@ function isDestinationAccessError(err: TelegramError) {
   return patterns.some((p) => desc.includes(p));
 }
 
+function parseGeoCoords(raw: string): { latitude: number; longitude: number } | null {
+  const s = String(raw || "").trim();
+  if (!s) return null;
+
+  const toNum = (v: string) => {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  };
+  const safeDecode = (v: string) => {
+    try {
+      return decodeURIComponent(v);
+    } catch {
+      return v;
+    }
+  };
+
+  const geo = /^geo:\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)/i.exec(s);
+  if (geo) {
+    const latitude = toNum(geo[1]);
+    const longitude = toNum(geo[2]);
+    if (latitude !== null && longitude !== null) return { latitude, longitude };
+  }
+
+  try {
+    const u = new URL(s);
+    const keysLat = ["lat", "latitude"];
+    const keysLon = ["lon", "lng", "longitude"];
+    let latitude: number | null = null;
+    let longitude: number | null = null;
+    for (const k of keysLat) {
+      const v = u.searchParams.get(k);
+      if (v != null) {
+        latitude = toNum(v);
+        if (latitude !== null) break;
+      }
+    }
+    for (const k of keysLon) {
+      const v = u.searchParams.get(k);
+      if (v != null) {
+        longitude = toNum(v);
+        if (longitude !== null) break;
+      }
+    }
+    if (latitude !== null && longitude !== null) return { latitude, longitude };
+
+    const q = u.searchParams.get("q") || u.searchParams.get("query") || "";
+    const qm = /(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)/.exec(safeDecode(q));
+    if (qm) {
+      latitude = toNum(qm[1]);
+      longitude = toNum(qm[2]);
+      if (latitude !== null && longitude !== null) return { latitude, longitude };
+    }
+
+    const ll = u.searchParams.get("ll") || "";
+    const llm = /(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)/.exec(safeDecode(ll));
+    if (llm) {
+      // Some map providers use ll=lon,lat.
+      longitude = toNum(llm[1]);
+      latitude = toNum(llm[2]);
+      if (latitude !== null && longitude !== null) return { latitude, longitude };
+    }
+
+    const at = /@(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)/.exec(u.pathname + u.hash);
+    if (at) {
+      latitude = toNum(at[1]);
+      longitude = toNum(at[2]);
+      if (latitude !== null && longitude !== null) return { latitude, longitude };
+    }
+  } catch {}
+
+  const rawPair =
+    /(geo:|map|maps|location|venue|lat|lon|lng|ll=|q=)/i.test(s) ? /(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)/.exec(s) : null;
+  if (rawPair) {
+    const latitude = toNum(rawPair[1]);
+    const longitude = toNum(rawPair[2]);
+    if (latitude !== null && longitude !== null) return { latitude, longitude };
+  }
+
+  return null;
+}
+
+function mediaSendSpec(kind: MediaItem["kind"]): { method: string; field: string } {
+  const k = String(kind || "").trim().toLowerCase();
+  if (k === "source_copy") return { method: "", field: "" };
+  if (k === "photo" || k === "image") return { method: "sendPhoto", field: "photo" };
+  if (k === "video") return { method: "sendVideo", field: "video" };
+  if (k === "audio" || k === "music") return { method: "sendAudio", field: "audio" };
+  if (k === "voice" || k === "voice_note") return { method: "sendVoice", field: "voice" };
+  if (k === "animation" || k === "gif") return { method: "sendAnimation", field: "animation" };
+  if (k === "sticker") return { method: "sendSticker", field: "sticker" };
+  if (k === "video_note" || k === "round_video" || k === "videonote") return { method: "sendVideoNote", field: "video_note" };
+  return { method: "sendDocument", field: "document" };
+}
+
+async function sendFallbackMedia(env: Env, destChatId: number, media: MediaItem[]) {
+  let sent = 0;
+  for (const item of media || []) {
+    const k = String(item.kind || "").trim().toLowerCase();
+    if (k === "location" || k === "venue") {
+      const geo = parseGeoCoords(item.url);
+      if (!geo) continue;
+      try {
+        await tg(env, "sendLocation", { chat_id: destChatId, latitude: geo.latitude, longitude: geo.longitude });
+        sent += 1;
+      } catch {}
+      continue;
+    }
+
+    const { method, field } = mediaSendSpec(k);
+    if (!method || !field) continue;
+    try {
+      await tg(env, method, { chat_id: destChatId, [field]: item.url });
+      sent += 1;
+    } catch {
+      // Retry as generic document when specific media endpoint rejects the URL.
+      if (method !== "sendDocument") {
+        try {
+          await tg(env, "sendDocument", { chat_id: destChatId, document: item.url });
+          sent += 1;
+        } catch {}
+      }
+    }
+  }
+  return sent > 0;
+}
+
 async function sendFeedPost(env: Env, destChatId: number, prefs: UserPrefs, username: string, label: string | null, post: ScrapedPost) {
   const link = post.link || `https://t.me/${username}/${post.postId}`;
   const rendered = renderDestinationPost(prefs.post_style, prefs.lang, username, label, post.text, link, {
     fullTextStyle: prefs.full_text_style,
   });
   const hasMedia = Array.isArray(post.media) && post.media.length > 0;
+  const shouldTryNativeCopy = hasMedia || !(post.text || "").trim();
+
+  if (shouldTryNativeCopy) {
+    try {
+      // Prefer copying the original Telegram post so media and formatting stay intact.
+      await tg(env, "copyMessage", {
+        chat_id: destChatId,
+        from_chat_id: `@${username}`,
+        message_id: Number(post.postId),
+      });
+      return;
+    } catch (e: any) {
+      // Preserve destination access failures for caller handling; fallback only for source/copy limitations.
+      if (e instanceof TelegramError && isDestinationAccessError(e)) throw e;
+    }
+
+    try {
+      // Some message types/channels may fail copy but still allow forwarding as-is.
+      await tg(env, "forwardMessage", {
+        chat_id: destChatId,
+        from_chat_id: `@${username}`,
+        message_id: Number(post.postId),
+      });
+      return;
+    } catch (e: any) {
+      if (e instanceof TelegramError && isDestinationAccessError(e)) throw e;
+    }
+  }
+
+  const sentFallbackMedia = hasMedia ? await sendFallbackMedia(env, destChatId, post.media) : false;
+
+  const shouldShowLinkPreview = hasMedia && !sentFallbackMedia;
 
   await tg(env, "sendMessage", {
     chat_id: destChatId,
     text: rendered.text,
     parse_mode: "HTML",
     reply_markup: rendered.reply_markup,
-    // Keep preview hidden for text-only posts; place media previews above text when present.
-    link_preview_options: hasMedia ? { is_disabled: false, show_above_text: true, url: link } : { is_disabled: true },
+    // Text-only posts stay plain; preview is used only when this post has media and none was sent directly.
+    link_preview_options: shouldShowLinkPreview
+      ? { is_disabled: false, show_above_text: true, url: link }
+      : { is_disabled: true },
   });
 }
 

@@ -41,57 +41,240 @@ function isEmojiAssetUrl(u: string) {
   );
 }
 
-function extractMedia(htmlSlice: string): MediaItem[] {
-  const photos: string[] = [];
-  const videos: string[] = [];
-  const docs: string[] = [];
+function toGeoUrl(lat: number, lon: number) {
+  return `geo:${lat},${lon}`;
+}
+
+function parseLocationCoords(u: string): { lat: number; lon: number } | null {
+  const s = String(u || "").trim();
+  if (!s) return null;
+
+  const parseNum = (v: string) => {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  };
+  const safeDecode = (v: string) => {
+    try {
+      return decodeURIComponent(v);
+    } catch {
+      return v;
+    }
+  };
+
+  const geo = /^geo:\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)/i.exec(s);
+  if (geo) {
+    const lat = parseNum(geo[1]);
+    const lon = parseNum(geo[2]);
+    if (lat !== null && lon !== null) return { lat, lon };
+  }
+
+  const tryUrl = (() => {
+    try {
+      return new URL(s);
+    } catch {
+      return null;
+    }
+  })();
+
+  if (tryUrl) {
+    const keysLat = ["lat", "latitude"];
+    const keysLon = ["lon", "lng", "longitude"];
+    let lat: number | null = null;
+    let lon: number | null = null;
+    for (const k of keysLat) {
+      const v = tryUrl.searchParams.get(k);
+      if (v != null) {
+        lat = parseNum(v);
+        if (lat !== null) break;
+      }
+    }
+    for (const k of keysLon) {
+      const v = tryUrl.searchParams.get(k);
+      if (v != null) {
+        lon = parseNum(v);
+        if (lon !== null) break;
+      }
+    }
+    if (lat !== null && lon !== null) return { lat, lon };
+
+    const q = tryUrl.searchParams.get("q") || tryUrl.searchParams.get("query") || "";
+    const qm = /(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)/.exec(safeDecode(q));
+    if (qm) {
+      lat = parseNum(qm[1]);
+      lon = parseNum(qm[2]);
+      if (lat !== null && lon !== null) return { lat, lon };
+    }
+
+    const ll = tryUrl.searchParams.get("ll") || "";
+    const llm = /(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)/.exec(safeDecode(ll));
+    if (llm) {
+      // Some map providers use ll=lon,lat.
+      lon = parseNum(llm[1]);
+      lat = parseNum(llm[2]);
+      if (lat !== null && lon !== null) return { lat, lon };
+    }
+
+    const at = /@(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)/.exec(tryUrl.pathname + tryUrl.hash);
+    if (at) {
+      lat = parseNum(at[1]);
+      lon = parseNum(at[2]);
+      if (lat !== null && lon !== null) return { lat, lon };
+    }
+  }
+
+  const rawPair =
+    /(geo:|map|maps|location|venue|lat|lon|lng|ll=|q=)/i.test(s) ? /(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)/.exec(s) : null;
+  if (rawPair) {
+    const lat = parseNum(rawPair[1]);
+    const lon = parseNum(rawPair[2]);
+    if (lat !== null && lon !== null) return { lat, lon };
+  }
+
+  return null;
+}
+
+function inferMediaKindFromUrl(u: string): MediaItem["kind"] | null {
+  const clean = String(u || "")
+    .split("#")[0]
+    .split("?")[0]
+    .toLowerCase();
+  if (!clean) return null;
+  if (clean.startsWith("geo:")) return "location";
+  if (clean.includes("maps.google.") || clean.includes("openstreetmap.org") || clean.includes("maps.apple.com")) return "location";
+  if (clean.includes("/sticker/") || clean.includes("sticker")) return "sticker";
+  if (/\.(jpg|jpeg|png|webp)$/i.test(clean)) return "photo";
+  if (/\.(tgs)$/i.test(clean)) return "sticker";
+  if (/\.gif$/i.test(clean)) return "animation";
+  if (/\.(mp3|m4a|aac|flac|wav)$/i.test(clean)) return "audio";
+  if (/\.(ogg|oga|opus)$/i.test(clean)) return "voice";
+  if (/\.(mp4|webm|mov|mkv)$/i.test(clean)) return "video";
+  if (/\.(pdf|txt|zip|rar|7z|doc|docx|xls|xlsx|ppt|pptx)$/i.test(clean)) return "document";
+  return null;
+}
+
+function looksLikeMediaUrl(u: string) {
+  const x = String(u || "").toLowerCase();
+  if (x.startsWith("geo:")) return true;
+  if (!/^https?:\/\//i.test(x)) return false;
+  if (x.includes("/file/")) return true;
+  if (x.includes("/video/") || x.includes("/audio/")) return true;
+  if (x.includes("maps.google.") || x.includes("openstreetmap.org") || x.includes("maps.apple.com")) return true;
+  if (/\.(jpg|jpeg|png|webp|tgs|gif|mp3|m4a|aac|flac|wav|ogg|oga|opus|mp4|webm|mov|mkv|pdf|txt|zip|rar|7z|doc|docx|xls|xlsx|ppt|pptx)(?:\?|#|$)/i.test(x))
+    return true;
+  return false;
+}
+
+function extractMedia(htmlSlice: string, messageLink: string): MediaItem[] {
+  const out: MediaItem[] = [];
+  const seen = new Set<string>();
+
+  const push = (kind: MediaItem["kind"], rawUrl: string) => {
+    const u = normalizeUrl(rawUrl);
+    if (!u) return;
+    const isGeo = /^geo:/i.test(u);
+    if (!isGeo && !/^https?:\/\//i.test(u)) return;
+    if (!isGeo && isEmojiAssetUrl(u)) return;
+    const key = `${kind}|${u}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push({ kind, url: u });
+  };
+
+  const pushByUrl = (rawUrl: string, fallback: MediaItem["kind"] = "document") => {
+    const u = normalizeUrl(rawUrl);
+    if (!u) return;
+    const inferred = inferMediaKindFromUrl(u);
+    const wantedKind = inferred || fallback;
+    if (String(wantedKind).toLowerCase() === "location") {
+      const coords = parseLocationCoords(u);
+      if (!coords) return;
+      push("location", toGeoUrl(coords.lat, coords.lon));
+      return;
+    }
+    if (!inferred && fallback === "document" && !looksLikeMediaUrl(u)) return;
+    push(wantedKind, u);
+  };
 
   // Only capture backgrounds from message media blocks (not avatars/userpics).
   const rePhotoWrapBg =
     /<[^>]*class="[^"]*tgme_widget_message_(?:photo_wrap|video_thumb|grouped)[^"]*"[^>]*style="[^"]*background-image\s*:\s*url\(['"]([^'"]+)['"]\)[^"]*"[^>]*>/gi;
   let m: RegExpExecArray | null;
   while ((m = rePhotoWrapBg.exec(htmlSlice)) !== null) {
-    const u = normalizeUrl(m[1]);
-    if (!isEmojiAssetUrl(u)) photos.push(u);
+    push("photo", m[1]);
+  }
+
+  const reStickerWrapBg =
+    /<[^>]*class="[^"]*tgme_widget_message_sticker[^"]*"[^>]*style="[^"]*background-image\s*:\s*url\(['"]([^'"]+)['"]\)[^"]*"[^>]*>/gi;
+  while ((m = reStickerWrapBg.exec(htmlSlice)) !== null) {
+    pushByUrl(m[1], "sticker");
   }
 
   // Keep <img> capture limited to message text/media containers.
   const reImg =
     /<img[^>]+class="[^"]*tgme_widget_message_[^"]*"[^>]+src="([^"]+)"/gi;
   while ((m = reImg.exec(htmlSlice)) !== null) {
-    const u = normalizeUrl(m[1]);
-    if (!isEmojiAssetUrl(u)) photos.push(u);
+    push("photo", m[1]);
   }
 
   const reDataVideo = /data-video="([^"]+)"/gi;
-  while ((m = reDataVideo.exec(htmlSlice)) !== null) videos.push(normalizeUrl(m[1]));
+  while ((m = reDataVideo.exec(htmlSlice)) !== null) push("video", m[1]);
 
   const reVideoSrc = /<(?:video|source)[^>]+src="([^"]+)"/gi;
-  while ((m = reVideoSrc.exec(htmlSlice)) !== null) {
-    const u = normalizeUrl(m[1]);
-    if (/\.mp4(\?|$)/i.test(u) || /video/i.test(u)) videos.push(u);
+  while ((m = reVideoSrc.exec(htmlSlice)) !== null) pushByUrl(m[1], "video");
+
+  const reAudioSrc = /<audio[^>]+src="([^"]+)"/gi;
+  while ((m = reAudioSrc.exec(htmlSlice)) !== null) pushByUrl(m[1], "audio");
+
+  const reDataAudio = /data-audio="([^"]+)"/gi;
+  while ((m = reDataAudio.exec(htmlSlice)) !== null) pushByUrl(m[1], "audio");
+
+  const reDataVoice = /data-voice="([^"]+)"/gi;
+  while ((m = reDataVoice.exec(htmlSlice)) !== null) pushByUrl(m[1], "voice");
+
+  const reDataAnimation = /data-animation="([^"]+)"/gi;
+  while ((m = reDataAnimation.exec(htmlSlice)) !== null) pushByUrl(m[1], "animation");
+
+  const reDataSticker = /data-sticker="([^"]+)"/gi;
+  while ((m = reDataSticker.exec(htmlSlice)) !== null) pushByUrl(m[1], "sticker");
+
+  const reDataDocument = /data-document="([^"]+)"/gi;
+  while ((m = reDataDocument.exec(htmlSlice)) !== null) pushByUrl(m[1], "document");
+
+  const reDataFile = /data-file="([^"]+)"/gi;
+  while ((m = reDataFile.exec(htmlSlice)) !== null) pushByUrl(m[1], "document");
+
+  const reDataLatLonA = /data-(?:lat|latitude)="(-?\d+(?:\.\d+)?)"[^>]*data-(?:lon|lng|longitude)="(-?\d+(?:\.\d+)?)"/gi;
+  while ((m = reDataLatLonA.exec(htmlSlice)) !== null) push("location", toGeoUrl(Number(m[1]), Number(m[2])));
+
+  const reDataLatLonB = /data-(?:lon|lng|longitude)="(-?\d+(?:\.\d+)?)"[^>]*data-(?:lat|latitude)="(-?\d+(?:\.\d+)?)"/gi;
+  while ((m = reDataLatLonB.exec(htmlSlice)) !== null) push("location", toGeoUrl(Number(m[2]), Number(m[1])));
+
+  // File links can point to documents, audio, voice notes, or gifs.
+  const reFileHref = /href="(https?:\/\/[^"]+\/file\/[^"]+)"/gi;
+  while ((m = reFileHref.exec(htmlSlice)) !== null) pushByUrl(m[1], "document");
+
+  const reMediaHref = /href="(https?:\/\/[^"]+\.(?:gif|mp3|m4a|aac|flac|wav|ogg|oga|opus|mp4|webm|mov)(?:\?[^"]*)?)"/gi;
+  while ((m = reMediaHref.exec(htmlSlice)) !== null) pushByUrl(m[1], "document");
+
+  const reAnyHref = /href="([^"]+)"/gi;
+  while ((m = reAnyHref.exec(htmlSlice)) !== null) {
+    const href = normalizeUrl(m[1]);
+    if (!href) continue;
+    if (parseLocationCoords(href)) {
+      pushByUrl(href, "location");
+      continue;
+    }
+    if (looksLikeMediaUrl(href)) pushByUrl(href, "document");
   }
 
-  const reDoc = /href="(https?:\/\/cdn\d+\.telesco\.pe\/file\/[^\"]+)"/gi;
-  while ((m = reDoc.exec(htmlSlice)) !== null) {
-    const u = normalizeUrl(m[1]);
-    if (/\.(jpg|jpeg|png|webp|gif)(\?|$)/i.test(u)) continue;
-    if (/\.mp4(\?|$)/i.test(u)) continue;
-    docs.push(u);
+  // Hint that this post has non-text/native payload even if direct media URLs were not extractable.
+  const hasNativeOnlyWidget =
+    /tgme_widget_message_(?:sticker|audio|voice|music|audio_player|location|live_location|roundvideo|contact|poll|game|invoice|venue|document|file)/i.test(htmlSlice);
+  if (hasNativeOnlyWidget && !out.some((it) => it.kind === "source_copy")) {
+    push("source_copy", messageLink);
   }
 
-  const uniq = (arr: string[]) => {
-    const s = new Set<string>();
-    for (const x of arr) if (x) s.add(x);
-    return [...s];
-  };
-
-  const out: MediaItem[] = [];
-  for (const u of uniq(photos)) out.push({ kind: "photo", url: u });
-  for (const u of uniq(videos)) out.push({ kind: "video", url: u });
-  for (const u of uniq(docs)) out.push({ kind: "document", url: u });
-
-  return out.slice(0, 10);
+  return out;
 }
 
 export async function fetchTme(username: string): Promise<string> {
@@ -148,9 +331,10 @@ export function scrapeTmePreview(username: string, html: string): ScrapedPost[] 
     const raw = textMatch ? textMatch[1] : "";
     const text = raw ? stripHtml(raw) : "";
 
-    const media = extractMedia(slice);
+    const link = `https://t.me/${username}/${cur.postId}`;
+    const media = extractMedia(slice, link);
 
-    posts.push({ postId: cur.postId, text, media, link: `https://t.me/${username}/${cur.postId}` });
+    posts.push({ postId: cur.postId, text, media, link });
   }
 
   const score = (p: ScrapedPost) => {
