@@ -297,6 +297,7 @@ async function sendFeedPost(env: Env, destChatId: number, prefs: UserPrefs, user
   const link = post.link || `https://t.me/${username}/${post.postId}`;
   const rendered = renderDestinationPost(prefs.post_style, prefs.lang, username, label, post.text, link, {
     fullTextStyle: prefs.full_text_style,
+    destinationChatId: destChatId,
   });
   const hasMedia = Array.isArray(post.media) && post.media.length > 0;
   const shouldTryNativeCopy = hasMedia || !(post.text || "").trim();

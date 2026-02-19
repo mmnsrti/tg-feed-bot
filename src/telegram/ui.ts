@@ -220,7 +220,25 @@ export function S(lang: Lang) {
 
     linkOriginal: L("پست اصلی", "Original post"),
     linkProfile: L("عکس پروفایل", "Profile photo"),
-    postChannelSettings: L("⚙️ تنظیمات این کانال", "⚙️ Channel settings"),
+    postChannelSettings: L("⚙️ تنظیمات کانال", "⚙️ Channel settings"),
+    settingsAdminsOnly: L(
+      [
+        "⚠️ الان اجازه مدیریت این کانال برای شما فعال نیست.",
+        "",
+        "ولی می‌تونی از ربات استفاده کنی:",
+        "1) مقصد خودت را تنظیم کن",
+        "2) با /follow یا «افزودن کانال» کانال‌ها را دنبال کن",
+        "3) از «کانال‌های من» تنظیمات و فیلترها را مدیریت کن",
+      ].join("\n"),
+      [
+        "⚠️ You currently don't have management access for this channel.",
+        "",
+        "You can still use the bot:",
+        "1) Set your own destination channel",
+        "2) Follow channels using /follow or Add Channel",
+        "3) Manage settings and filters from My Channels",
+      ].join("\n")
+    ),
   };
 }
 
@@ -302,12 +320,18 @@ function brandMentionsLine() {
 
 type RenderedMessage = { text: string; reply_markup: any };
 
-export function postButtons(lang: Lang, username: string, link: string, _channelLabel: string | null) {
+export function postButtons(
+  lang: Lang,
+  username: string,
+  link: string,
+  _channelLabel: string | null,
+  destinationChatId?: number | null
+) {
   const s = S(lang);
   return {
     inline_keyboard: [
       [
-        { text: s.postChannelSettings, url: buildChannelSettingsDeepLink(username) },
+        { text: s.postChannelSettings, url: buildChannelSettingsDeepLink(username, destinationChatId) },
         { text: s.openOriginal, url: link },
       ],
     ],
@@ -321,7 +345,7 @@ export function renderCompactPost(
   channelLabel: string | null,
   postText: string,
   postLink: string,
-  opts?: { includeHeader?: boolean }
+  opts?: { includeHeader?: boolean; destinationChatId?: number | null }
 ): RenderedMessage {
   const s = S(lang);
   const header = headerLineWithChannelLink(channelUsername, channelLabel);
@@ -333,7 +357,10 @@ export function renderCompactPost(
   const includeHeader = opts?.includeHeader !== false;
   const lines = includeHeader ? [header, safeSnippet, "", brandMentionsLine()] : [safeSnippet, "", brandMentionsLine()];
 
-  return { text: lines.join("\n"), reply_markup: postButtons(lang, channelUsername, postLink, channelLabel) };
+  return {
+    text: lines.join("\n"),
+    reply_markup: postButtons(lang, channelUsername, postLink, channelLabel, opts?.destinationChatId ?? null),
+  };
 }
 
 // Pure renderer: (lang, channelUsername, channelLabel, postText, postLink)
@@ -343,7 +370,7 @@ export function renderRichPost(
   channelLabel: string | null,
   postText: string,
   postLink: string,
-  opts?: { includeHeader?: boolean; fullTextStyle?: FullTextStyle }
+  opts?: { includeHeader?: boolean; fullTextStyle?: FullTextStyle; destinationChatId?: number | null }
 ): RenderedMessage {
   const s = S(lang);
   const header = headerLineWithChannelLink(channelUsername, channelLabel);
@@ -357,7 +384,10 @@ export function renderRichPost(
   const includeHeader = opts?.includeHeader !== false;
   const parts = includeHeader ? [header, body, "", brandMentionsLine()] : [body, "", brandMentionsLine()];
 
-  return { text: parts.join("\n"), reply_markup: postButtons(lang, channelUsername, postLink, channelLabel) };
+  return {
+    text: parts.join("\n"),
+    reply_markup: postButtons(lang, channelUsername, postLink, channelLabel, opts?.destinationChatId ?? null),
+  };
 }
 
 export function renderDestinationPost(
@@ -367,7 +397,7 @@ export function renderDestinationPost(
   channelLabel: string | null,
   postText: string,
   postLink: string,
-  opts?: { includeHeader?: boolean; fullTextStyle?: FullTextStyle }
+  opts?: { includeHeader?: boolean; fullTextStyle?: FullTextStyle; destinationChatId?: number | null }
 ): RenderedMessage {
   return style === "compact"
     ? renderCompactPost(lang, channelUsername, channelLabel, postText, postLink, opts)

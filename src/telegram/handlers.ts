@@ -84,6 +84,17 @@ function extractForwardedUsername(msg: any): string | null {
   return null;
 }
 
+async function isChannelAdmin(env: Env, channelChatId: number, userId: number): Promise<boolean> {
+  if (!Number.isFinite(channelChatId) || !Number.isInteger(channelChatId) || channelChatId === 0) return false;
+  try {
+    const member = await tg(env, "getChatMember", { chat_id: channelChatId, user_id: userId });
+    const status = String(member?.status || "").toLowerCase();
+    return status === "creator" || status === "administrator";
+  } catch {
+    return false;
+  }
+}
+
 function makeToken() {
   return crypto.randomUUID().replace(/-/g, "").slice(0, 16);
 }
@@ -773,8 +784,23 @@ export async function handlePrivateMessage(env: Env, msg: any) {
     if (cmd.cmd === "/start") {
       await clearState(env.DB, userId);
       const startArg = String(cmd.args?.[0] || "").trim();
-      const settingsUsername = parseChannelSettingsStartPayload(startArg);
-      if (settingsUsername) return showChannelSettings(env, userId, settingsUsername);
+      const settingsPayload = parseChannelSettingsStartPayload(startArg);
+      if (settingsPayload) {
+        const { username, destinationChatId } = settingsPayload;
+        if (destinationChatId !== null) {
+          const allowed = await isChannelAdmin(env, destinationChatId, userId);
+          if (!allowed) {
+            const dest = await getDestination(env.DB, userId);
+            await tg(env, "sendMessage", {
+              chat_id: userId,
+              text: s.settingsAdminsOnly,
+              reply_markup: homeKeyboard(prefs.lang, !!dest),
+            });
+            return;
+          }
+        }
+        return showChannelSettings(env, userId, username);
+      }
       return sendHome(env, userId);
     }
     if (cmd.cmd === "/help") return showHelp(env, userId);
