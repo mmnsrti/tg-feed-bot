@@ -548,13 +548,32 @@ async function processFollowUsernames(env: Env, userId: number, usernames: strin
   const ok: string[] = [];
   const already: string[] = [];
   const failed: string[] = [];
+  const statusByUser = new Map<string, FollowResultStatus>();
 
   const destChatId = Number(dest.chat_id);
   for (const u of unique) {
     const res = await followOneChannel(env, userId, u, prefs, destChatId);
+    statusByUser.set(u, res.status);
     if (res.status === "ok") ok.push(u);
     else if (res.status === "already") already.push(u);
     else failed.push(u);
+  }
+
+  if (unique.length === 1 && !opts.batch) {
+    const u = unique[0];
+    const status = statusByUser.get(u);
+    const backfillN = clamp(Number(prefs.default_backfill_n ?? 0), 0, 10);
+
+    let text = s.fetchFailed;
+    if (status === "ok") text = prefs.realtime_enabled ? s.followed(u, backfillN) : s.followedNoRealtime(u);
+    else if (status === "already") text = `${s.alreadyLabel}: @${u}`;
+    else if (status === "couldnt_read") text = s.couldntRead(u);
+
+    if (invalid.length) text += `\n${s.invalidLabel}: ${invalid.slice(0, 10).join(", ")}`;
+
+    await tg(env, "sendMessage", { chat_id: userId, text, reply_markup: followMoreKeyboard(prefs.lang) });
+    await clearState(env.DB, userId);
+    return;
   }
 
   const lines: string[] = [s.followSummaryTitle(ok.length, unique.length)];
