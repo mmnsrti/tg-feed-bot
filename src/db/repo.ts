@@ -11,8 +11,42 @@ export function clamp(n: number, a: number, b: number) {
 }
 
 /** ------------------- users & destinations ------------------- */
-export async function upsertUser(db: D1Database, userId: number) {
-  await db.prepare("INSERT OR IGNORE INTO users(user_id, created_at) VALUES(?, ?)").bind(userId, nowSec()).run();
+export async function upsertUser(
+  db: D1Database,
+  userId: number,
+  profile?: { username?: unknown; first_name?: unknown; last_name?: unknown }
+) {
+  const cleanText = (v: unknown, max = 128) => {
+    const s = String(v ?? "").trim();
+    if (!s) return null;
+    return s.slice(0, max);
+  };
+
+  const cleanUsername = (v: unknown) => {
+    const raw = cleanText(v, 64);
+    if (!raw) return null;
+    const noAt = raw.replace(/^@+/, "");
+    if (!/^[A-Za-z0-9_]{3,64}$/.test(noAt)) return null;
+    return noAt.toLowerCase();
+  };
+
+  const now = nowSec();
+  const username = cleanUsername(profile?.username);
+  const firstName = cleanText(profile?.first_name, 128);
+  const lastName = cleanText(profile?.last_name, 128);
+
+  await db
+    .prepare(
+      `INSERT INTO users(user_id, created_at, username, first_name, last_name, updated_at)
+       VALUES(?, ?, ?, ?, ?, ?)
+       ON CONFLICT(user_id) DO UPDATE SET
+         username = COALESCE(excluded.username, users.username),
+         first_name = COALESCE(excluded.first_name, users.first_name),
+         last_name = COALESCE(excluded.last_name, users.last_name),
+         updated_at = excluded.updated_at`
+    )
+    .bind(userId, now, username, firstName, lastName, now)
+    .run();
 }
 
 export async function getDestination(db: D1Database, userId: number): Promise<DestinationRow | null> {
