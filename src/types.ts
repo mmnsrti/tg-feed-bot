@@ -36,6 +36,8 @@ export type UserPrefs = {
   quiet_end: number;
   post_style: PostStyle;
   full_text_style: FullTextStyle;
+  global_include_keywords: string;
+  global_exclude_keywords: string;
 };
 
 export type DestinationRow = {

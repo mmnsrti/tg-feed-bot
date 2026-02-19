@@ -5,7 +5,7 @@ export async function ensureDbUpgrades(db: D1Database) {
 
   const row = await db.prepare("SELECT value FROM meta_kv WHERE key='schema_v'").first<any>();
   const v = Number(row?.value ?? 0);
-  if (v >= 5) return;
+  if (v >= 6) return;
 
   // v1
   if (v < 1) {
@@ -83,5 +83,18 @@ export async function ensureDbUpgrades(db: D1Database) {
     }
   }
 
-  await db.prepare("INSERT OR REPLACE INTO meta_kv(key, value) VALUES('schema_v', '5')").run();
+  // v6: global include/exclude filters in user prefs
+  if (v < 6) {
+    const altersV6 = [
+      "ALTER TABLE user_prefs ADD COLUMN global_include_keywords TEXT NOT NULL DEFAULT '[]'",
+      "ALTER TABLE user_prefs ADD COLUMN global_exclude_keywords TEXT NOT NULL DEFAULT '[]'",
+    ];
+    for (const q of altersV6) {
+      try {
+        await db.prepare(q).run();
+      } catch {}
+    }
+  }
+
+  await db.prepare("INSERT OR REPLACE INTO meta_kv(key, value) VALUES('schema_v', '6')").run();
 }
