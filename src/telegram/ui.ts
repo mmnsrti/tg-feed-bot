@@ -1,4 +1,5 @@
 import { FullTextStyle, Lang, PostStyle, UserPrefs } from "../types";
+import { BOT_USERNAME, MAIN_CHANNEL_USERNAME, buildChannelSettingsDeepLink } from "./postLinks";
 
 export function t(lang: Lang, fa: string, en: string) {
   return lang === "fa" ? fa : en;
@@ -219,6 +220,7 @@ export function S(lang: Lang) {
 
     linkOriginal: L("پست اصلی", "Original post"),
     linkProfile: L("عکس پروفایل", "Profile photo"),
+    postChannelSettings: L("⚙️ تنظیمات این کانال", "⚙️ Channel settings"),
   };
 }
 
@@ -292,16 +294,22 @@ function headerLineWithChannelLink(username: string, label: string | null) {
   return `📰 ${labelPart}`;
 }
 
+function brandMentionsLine() {
+  const channel = `@${MAIN_CHANNEL_USERNAME}`;
+  const bot = `@${BOT_USERNAME}`;
+  return `${channel} • ${bot}`;
+}
+
 type RenderedMessage = { text: string; reply_markup: any };
 
-export function postButtons(_lang: Lang, username: string, link: string, channelLabel: string | null) {
+export function postButtons(lang: Lang, username: string, link: string, channelLabel: string | null) {
+  const s = S(lang);
   const cleanLabel = (channelLabel || "").toString().replace(/\s+/g, " ").trim();
   const channelName = cleanLabel || `@${username}`;
   return {
     inline_keyboard: [
-      [
-        { text: channelName, url: link },
-      ],
+      [{ text: s.postChannelSettings, url: buildChannelSettingsDeepLink(username) }],
+      [{ text: channelName, url: link }],
     ],
   };
 }
@@ -323,7 +331,7 @@ export function renderCompactPost(
   const safeSnippet = escapeHtml(snippet);
 
   const includeHeader = opts?.includeHeader !== false;
-  const lines = includeHeader ? [header, safeSnippet] : [safeSnippet];
+  const lines = includeHeader ? [header, safeSnippet, brandMentionsLine()] : [safeSnippet, brandMentionsLine()];
 
   return { text: lines.join("\n"), reply_markup: postButtons(lang, channelUsername, postLink, channelLabel) };
 }
@@ -347,7 +355,7 @@ export function renderRichPost(
   const body = escapeHtml(full);
 
   const includeHeader = opts?.includeHeader !== false;
-  const parts = includeHeader ? [header, body] : [body];
+  const parts = includeHeader ? [header, body, brandMentionsLine()] : [body, brandMentionsLine()];
 
   return { text: parts.join("\n"), reply_markup: postButtons(lang, channelUsername, postLink, channelLabel) };
 }
