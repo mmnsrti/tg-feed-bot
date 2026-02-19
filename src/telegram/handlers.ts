@@ -13,7 +13,7 @@ import {
   homeKeyboard,
   settingsKeyboard,
 } from "./ui";
-import { parseChannelSettingsStartPayload } from "./postLinks";
+import { MAIN_CHANNEL_USERNAME, parseChannelSettingsStartPayload } from "./postLinks";
 import {
   addUserSource,
   clearDestination,
@@ -102,6 +102,52 @@ async function isChannelAdmin(env: Env, channelChatId: number, userId: number): 
     const member = await tg(env, "getChatMember", { chat_id: channelChatId, user_id: userId });
     const status = String(member?.status || "").toLowerCase();
     return status === "creator" || status === "administrator";
+  } catch {
+    return false;
+  }
+}
+
+function getChatPhotoFileId(chat: any): string | null {
+  const big = String(chat?.photo?.big_file_id || "").trim();
+  if (big) return big;
+  const small = String(chat?.photo?.small_file_id || "").trim();
+  if (small) return small;
+  return null;
+}
+
+async function setDestinationPhotoFromMainChannelIfMissing(env: Env, destinationChatId: number): Promise<boolean> {
+  if (!Number.isFinite(destinationChatId) || !Number.isInteger(destinationChatId) || destinationChatId === 0) return false;
+
+  try {
+    const destination = await tg(env, "getChat", { chat_id: destinationChatId });
+    if (getChatPhotoFileId(destination)) return false;
+
+    const mainChannel = await tg(env, "getChat", { chat_id: `@${MAIN_CHANNEL_USERNAME}` });
+    const mainPhotoFileId = getChatPhotoFileId(mainChannel);
+    if (!mainPhotoFileId) return false;
+
+    const file = await tg(env, "getFile", { file_id: mainPhotoFileId });
+    const path = String(file?.file_path || "").trim();
+    if (!path) return false;
+
+    const fileRes = await fetch(`https://api.telegram.org/file/bot${env.BOT_TOKEN}/${path}`);
+    if (!fileRes.ok) return false;
+
+    const arrayBuffer = await fileRes.arrayBuffer();
+    if (!arrayBuffer.byteLength) return false;
+
+    const form = new FormData();
+    form.append("chat_id", String(destinationChatId));
+    form.append("photo", new Blob([arrayBuffer], { type: fileRes.headers.get("content-type") || "image/jpeg" }), "channel-photo.jpg");
+
+    const res = await fetch(`https://api.telegram.org/bot${env.BOT_TOKEN}/setChatPhoto`, {
+      method: "POST",
+      body: form,
+    });
+    if (!res.ok) return false;
+
+    const data = await res.json<any>();
+    return data?.ok === true;
   } catch {
     return false;
   }
@@ -599,6 +645,7 @@ export async function handleChannelPost(env: Env, msg: any) {
   const userId = Number(row.user_id);
 
   await setDestinationVerified(env.DB, userId, chatId);
+  await setDestinationPhotoFromMainChannelIfMissing(env, Number(chatId));
   await env.DB.prepare("DELETE FROM pending_claims WHERE token=?").bind(token).run();
 
   await sendHome(env, userId);
