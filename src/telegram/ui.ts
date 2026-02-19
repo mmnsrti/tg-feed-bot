@@ -1,5 +1,5 @@
 import { FullTextStyle, Lang, PostStyle, UserPrefs } from "../types";
-import { BOT_USERNAME, MAIN_CHANNEL_USERNAME, buildChannelSettingsDeepLink } from "./postLinks";
+import { BOT_USERNAME, MAIN_CHANNEL_USERNAME, buildChannelSettingsDeepLink, channelUrl } from "./postLinks";
 
 export function t(lang: Lang, fa: string, en: string) {
   return lang === "fa" ? fa : en;
@@ -295,21 +295,21 @@ function headerLineWithChannelLink(username: string, label: string | null) {
 }
 
 function brandMentionsLine() {
-  const channel = `@${MAIN_CHANNEL_USERNAME}`;
-  const bot = `@${BOT_USERNAME}`;
-  return `${channel} • ${bot}`;
+  const channel = `<a href="${escapeAttr(channelUrl(MAIN_CHANNEL_USERNAME))}">@${MAIN_CHANNEL_USERNAME}</a>`;
+  const bot = `<a href="${escapeAttr(channelUrl(BOT_USERNAME))}">@${BOT_USERNAME}</a>`;
+  return `📣 ${channel} • 🤖 ${bot}`;
 }
 
 type RenderedMessage = { text: string; reply_markup: any };
 
-export function postButtons(lang: Lang, username: string, link: string, channelLabel: string | null) {
+export function postButtons(lang: Lang, username: string, link: string, _channelLabel: string | null) {
   const s = S(lang);
-  const cleanLabel = (channelLabel || "").toString().replace(/\s+/g, " ").trim();
-  const channelName = cleanLabel || `@${username}`;
   return {
     inline_keyboard: [
-      [{ text: s.postChannelSettings, url: buildChannelSettingsDeepLink(username) }],
-      [{ text: channelName, url: link }],
+      [
+        { text: s.postChannelSettings, url: buildChannelSettingsDeepLink(username) },
+        { text: s.openOriginal, url: link },
+      ],
     ],
   };
 }
@@ -331,7 +331,7 @@ export function renderCompactPost(
   const safeSnippet = escapeHtml(snippet);
 
   const includeHeader = opts?.includeHeader !== false;
-  const lines = includeHeader ? [header, safeSnippet, brandMentionsLine()] : [safeSnippet, brandMentionsLine()];
+  const lines = includeHeader ? [header, safeSnippet, "", brandMentionsLine()] : [safeSnippet, "", brandMentionsLine()];
 
   return { text: lines.join("\n"), reply_markup: postButtons(lang, channelUsername, postLink, channelLabel) };
 }
@@ -355,7 +355,7 @@ export function renderRichPost(
   const body = escapeHtml(full);
 
   const includeHeader = opts?.includeHeader !== false;
-  const parts = includeHeader ? [header, body, brandMentionsLine()] : [body, brandMentionsLine()];
+  const parts = includeHeader ? [header, body, "", brandMentionsLine()] : [body, "", brandMentionsLine()];
 
   return { text: parts.join("\n"), reply_markup: postButtons(lang, channelUsername, postLink, channelLabel) };
 }

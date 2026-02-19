@@ -156,7 +156,9 @@ export async function listUserSources(db: D1Database, userId: number, limit: num
 
 export async function getUserSource(db: D1Database, userId: number, username: string): Promise<UserSourceRow | null> {
   return db
-    .prepare("SELECT username, paused, mode, include_keywords, exclude_keywords, backfill_n, label FROM user_sources WHERE user_id=? AND username=?")
+    .prepare(
+      "SELECT username, paused, mode, include_keywords, exclude_keywords, backfill_n, label FROM user_sources WHERE user_id=? AND lower(username)=lower(?) LIMIT 1"
+    )
     .bind(userId, username)
     .first<any>();
 }

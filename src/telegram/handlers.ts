@@ -99,7 +99,7 @@ function normalizeUsername(input: string) {
   if (s.startsWith("@")) s = s.slice(1);
 
   if (!/^[A-Za-z0-9_]{5,32}$/.test(s)) return null;
-  return s;
+  return s.toLowerCase();
 }
 
 function normalizeSearchQuery(input: string) {
@@ -320,12 +320,14 @@ async function showChannelSettings(env: Env, userId: number, username: string, m
     return;
   }
 
+  const sourceUsername = String(sub.username || username);
+
   const include = parseKeywords(sub.include_keywords);
   const exclude = parseKeywords(sub.exclude_keywords);
-  const label = (sub.label || "").toString().trim() || username;
+  const label = (sub.label || "").toString().trim() || sourceUsername;
 
   const text = [
-    s.chSettingsTitle(username),
+    s.chSettingsTitle(sourceUsername),
     `${s.statusLabel}: ${sub.paused ? s.statusPaused : s.statusActive}`,
     `${s.modeLabel}: ${sub.mode === "digest" ? s.modeDigest : s.modeRealtime}`,
     `${s.labelLabel}: ${label}`,
@@ -335,7 +337,12 @@ async function showChannelSettings(env: Env, userId: number, username: string, m
     `${s.excludeLabel}: ${exclude.length ? exclude.join(", ") : "—"}`,
   ].join("\n");
 
-  await sendOrEdit(env, { chat_id: userId, message_id, text, reply_markup: channelKeyboard(prefs.lang, username, Number(sub.paused), String(sub.mode)) });
+  await sendOrEdit(env, {
+    chat_id: userId,
+    message_id,
+    text,
+    reply_markup: channelKeyboard(prefs.lang, sourceUsername, Number(sub.paused), String(sub.mode)),
+  });
 }
 
 async function showFilters(env: Env, userId: number, username: string, message_id?: number) {
