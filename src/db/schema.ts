@@ -5,7 +5,7 @@ export async function ensureDbUpgrades(db: D1Database) {
 
   const row = await db.prepare("SELECT value FROM meta_kv WHERE key='schema_v'").first<any>();
   const v = Number(row?.value ?? 0);
-  if (v >= 6) return;
+  if (v >= 7) return;
 
   // v1
   if (v < 1) {
@@ -96,5 +96,20 @@ export async function ensureDbUpgrades(db: D1Database) {
     }
   }
 
-  await db.prepare("INSERT OR REPLACE INTO meta_kv(key, value) VALUES('schema_v', '6')").run();
+  // v7: store Telegram user profile fields for admin dashboard visibility
+  if (v < 7) {
+    const altersV7 = [
+      "ALTER TABLE users ADD COLUMN username TEXT",
+      "ALTER TABLE users ADD COLUMN first_name TEXT",
+      "ALTER TABLE users ADD COLUMN last_name TEXT",
+      "ALTER TABLE users ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0",
+    ];
+    for (const q of altersV7) {
+      try {
+        await db.prepare(q).run();
+      } catch {}
+    }
+  }
+
+  await db.prepare("INSERT OR REPLACE INTO meta_kv(key, value) VALUES('schema_v', '7')").run();
 }

@@ -607,7 +607,11 @@ export async function handleChannelPost(env: Env, msg: any) {
 /** ------------------- callbacks ------------------- */
 export async function handleCallback(env: Env, cq: any) {
   const userId = cq.from.id;
-  await upsertUser(env.DB, userId);
+  await upsertUser(env.DB, userId, {
+    username: cq?.from?.username,
+    first_name: cq?.from?.first_name,
+    last_name: cq?.from?.last_name,
+  });
 
   const prefs = await ensurePrefs(env.DB, userId);
 
@@ -827,7 +831,11 @@ export async function handlePrivateMessage(env: Env, msg: any) {
   const userId = msg.from.id;
   const text = msg.text || "";
 
-  await upsertUser(env.DB, userId);
+  await upsertUser(env.DB, userId, {
+    username: msg?.from?.username,
+    first_name: msg?.from?.first_name,
+    last_name: msg?.from?.last_name,
+  });
   const prefs = await ensurePrefs(env.DB, userId);
   const s = S(prefs.lang);
 

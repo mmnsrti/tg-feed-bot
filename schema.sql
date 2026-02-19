@@ -8,7 +8,11 @@ CREATE TABLE IF NOT EXISTS meta_kv (
 -- core
 CREATE TABLE IF NOT EXISTS users (
   user_id INTEGER PRIMARY KEY,
-  created_at INTEGER NOT NULL
+  created_at INTEGER NOT NULL,
+  username TEXT,
+  first_name TEXT,
+  last_name TEXT,
+  updated_at INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS pending_claims (
