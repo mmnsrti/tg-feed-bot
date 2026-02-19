@@ -4,6 +4,7 @@ import { Hono } from "hono";
 import { Env, TgUpdate } from "./types";
 import { ensureDbUpgrades } from "./db/schema";
 import { handleCallback, handleChannelPost, handlePrivateMessage } from "./telegram/handlers";
+import { ensureBotCommands } from "./telegram/commands";
 import { runScrapeTick } from "./ticker/do";
 import { buildAdminStats, renderAdminStatsPage } from "./admin/stats";
 
@@ -18,6 +19,7 @@ const DELIVERY_TTL_DAYS = 14;
 
 async function processUpdate(env: Env, update: TgUpdate) {
   await ensureDbUpgrades(env.DB);
+  await ensureBotCommands(env);
 
   if (update.callback_query) {
     await handleCallback(env, update.callback_query);

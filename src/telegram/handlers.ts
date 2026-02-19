@@ -1,6 +1,18 @@
 ﻿import { Env, Lang, ScrapedPost, UserPrefs } from "../types";
 import { tg } from "./client";
-import { S, backKeyboard, backfillKeyboard, cancelKeyboard, channelKeyboard, destinationManageKeyboard, filtersKeyboard, followMoreKeyboard, homeKeyboard, settingsKeyboard } from "./ui";
+import {
+  S,
+  backKeyboard,
+  backfillKeyboard,
+  cancelKeyboard,
+  channelKeyboard,
+  destinationManageKeyboard,
+  filtersKeyboard,
+  followMoreKeyboard,
+  globalFiltersKeyboard,
+  homeKeyboard,
+  settingsKeyboard,
+} from "./ui";
 import { parseChannelSettingsStartPayload } from "./postLinks";
 import {
   addUserSource,
@@ -205,6 +217,8 @@ async function showSettings(env: Env, userId: number, message_id?: number) {
   const quiet = prefs.quiet_start < 0 || prefs.quiet_end < 0 ? s.quietOff : s.quietRange(prefs.quiet_start, prefs.quiet_end);
   const styleName = prefs.post_style === "compact" ? s.styleCompact : s.styleRich;
   const fullStyleName = prefs.full_text_style === "plain" ? s.stylePlain : s.styleQuote;
+  const globalInclude = parseKeywords(prefs.global_include_keywords);
+  const globalExclude = parseKeywords(prefs.global_exclude_keywords);
 
   const text = [
     s.settingsTitle,
@@ -213,6 +227,7 @@ async function showSettings(env: Env, userId: number, message_id?: number) {
     `${s.digest}: ${prefs.digest_hours} ${s.hours}`,
     `${s.quiet}: ${quiet}`,
     `${s.defaultBackfill}: ${prefs.default_backfill_n}`,
+    `${s.globalFilters}: ${s.globalFiltersSummary(globalInclude.length, globalExclude.length)}`,
     `${s.postStyle}: ${styleName}`,
     `${s.fullTextStyle}: ${fullStyleName}`,
   ].join("\n");
@@ -359,6 +374,24 @@ async function showChannelSettings(env: Env, userId: number, username: string, m
 async function showFilters(env: Env, userId: number, username: string, message_id?: number) {
   const prefs = await ensurePrefs(env.DB, userId);
   await sendOrEdit(env, { chat_id: userId, message_id, text: S(prefs.lang).filtersTitle(username), reply_markup: filtersKeyboard(prefs.lang, username) });
+}
+
+async function showGlobalFilters(env: Env, userId: number, message_id?: number) {
+  await clearState(env.DB, userId);
+  const prefs = await ensurePrefs(env.DB, userId);
+  const s = S(prefs.lang);
+  const include = parseKeywords(prefs.global_include_keywords);
+  const exclude = parseKeywords(prefs.global_exclude_keywords);
+
+  const text = [
+    s.globalFiltersTitle,
+    "",
+    `${s.globalFiltersSummary(include.length, exclude.length)}`,
+    `${s.includeLabel}: ${include.length ? include.join(", ") : "—"}`,
+    `${s.excludeLabel}: ${exclude.length ? exclude.join(", ") : "—"}`,
+  ].join("\n");
+
+  await sendOrEdit(env, { chat_id: userId, message_id, text, reply_markup: globalFiltersKeyboard(prefs.lang) });
 }
 
 async function handleListSearch(env: Env, userId: number, query: string) {
@@ -691,6 +724,9 @@ export async function handleCallback(env: Env, cq: any) {
     await tg(env, "sendMessage", { chat_id: userId, text: S(prefs.lang).backfillAsk, reply_markup: cancelKeyboard(prefs.lang) });
     return;
   }
+  if (data === "set:gfilters") {
+    return showGlobalFilters(env, userId, message_id);
+  }
 
   if (data === "set:test") {
     const d = await getDestination(env.DB, userId);
@@ -751,6 +787,22 @@ export async function handleCallback(env: Env, cq: any) {
     return;
   }
 
+  if (data === "gf:clear") {
+    await setPrefs(env.DB, userId, { global_include_keywords: "[]", global_exclude_keywords: "[]" });
+    await tg(env, "sendMessage", { chat_id: userId, text: S(prefs.lang).globalFiltersCleared });
+    return showGlobalFilters(env, userId, message_id);
+  }
+  if (data === "gf:set_inc") {
+    await setState(env.DB, userId, "await_global_include_keywords");
+    await tg(env, "sendMessage", { chat_id: userId, text: S(prefs.lang).globalIncPrompt, reply_markup: cancelKeyboard(prefs.lang) });
+    return;
+  }
+  if (data === "gf:set_exc") {
+    await setState(env.DB, userId, "await_global_exclude_keywords");
+    await tg(env, "sendMessage", { chat_id: userId, text: S(prefs.lang).globalExcPrompt, reply_markup: cancelKeyboard(prefs.lang) });
+    return;
+  }
+
   if (data.startsWith("bf:menu:")) {
     const u = data.split(":").slice(2).join(":");
     await sendOrEdit(env, { chat_id: userId, message_id, text: S(prefs.lang).backfillMenu(u), reply_markup: backfillKeyboard(prefs.lang, u) });
@@ -804,6 +856,10 @@ export async function handlePrivateMessage(env: Env, msg: any) {
       return sendHome(env, userId);
     }
     if (cmd.cmd === "/help") return showHelp(env, userId);
+    if (cmd.cmd === "/commands") {
+      const dest = await getDestination(env.DB, userId);
+      return tg(env, "sendMessage", { chat_id: userId, text: s.commandsText, reply_markup: homeKeyboard(prefs.lang, !!dest) });
+    }
     if (cmd.cmd === "/newdest") {
       await clearState(env.DB, userId);
       return startDestinationFlow(env, userId);
@@ -866,6 +922,30 @@ export async function handlePrivateMessage(env: Env, msg: any) {
     await updateUserSourceFilters(env.DB, userId, u, include, arr);
     await clearState(env.DB, userId);
     return showChannelSettings(env, userId, u);
+  }
+
+  if (st?.state === "await_global_include_keywords") {
+    const include = text.split(",").map((x) => x.trim()).filter(Boolean).slice(0, 80);
+    const cur = await ensurePrefs(env.DB, userId);
+    const exclude = parseKeywords(cur.global_exclude_keywords);
+    await setPrefs(env.DB, userId, {
+      global_include_keywords: JSON.stringify(include),
+      global_exclude_keywords: JSON.stringify(exclude),
+    });
+    await clearState(env.DB, userId);
+    return showGlobalFilters(env, userId);
+  }
+
+  if (st?.state === "await_global_exclude_keywords") {
+    const exclude = text.split(",").map((x) => x.trim()).filter(Boolean).slice(0, 80);
+    const cur = await ensurePrefs(env.DB, userId);
+    const include = parseKeywords(cur.global_include_keywords);
+    await setPrefs(env.DB, userId, {
+      global_include_keywords: JSON.stringify(include),
+      global_exclude_keywords: JSON.stringify(exclude),
+    });
+    await clearState(env.DB, userId);
+    return showGlobalFilters(env, userId);
   }
 
   if (st?.state === "await_digest_hours") {

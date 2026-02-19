@@ -45,6 +45,7 @@ export function S(lang: Lang) {
     digest: L("🧾 خلاصه", "🧾 Digest"),
     quiet: L("🌙 ساعت سکوت", "🌙 Quiet Hours"),
     defaultBackfill: L("📌 بک‌فیل پیش‌فرض", "📌 Default Backfill"),
+    globalFilters: L("🌐 فیلترهای سراسری", "🌐 Global Filters"),
     testDelivery: L("✅ تست ارسال", "✅ Test Delivery"),
     postStyle: L("🧩 سبک پست", "🧩 Post Style"),
     styleCompact: L("فشرده", "Compact"),
@@ -93,6 +94,36 @@ export function S(lang: Lang) {
     followMoreHint: L("یکی دیگه بفرست یا /done", "Send another or /done"),
     addAnother: L("➕ افزودن بیشتر", "➕ Add another"),
     addAll: L("✅ افزودن همه", "✅ Add all"),
+    commandsText: L(
+      [
+        "⌨️ دستورات",
+        "",
+        "/start - منوی اصلی",
+        "/help - راهنما",
+        "/commands - لیست دستورات",
+        "/newdest - تنظیم مقصد",
+        "/changedest - تغییر مقصد",
+        "/follow - افزودن کانال",
+        "/import - افزودن گروهی کانال‌ها",
+        "/list - کانال‌های من",
+        "/settings - تنظیمات",
+        "/cancel - لغو مرحله فعلی",
+      ].join("\n"),
+      [
+        "⌨️ Commands",
+        "",
+        "/start - Open home",
+        "/help - Help",
+        "/commands - Command list",
+        "/newdest - Set destination",
+        "/changedest - Change destination",
+        "/follow - Add channel",
+        "/import - Bulk import channels",
+        "/list - My channels",
+        "/settings - Open settings",
+        "/cancel - Cancel current step",
+      ].join("\n")
+    ),
 
     helpText: L(
       [
@@ -161,6 +192,11 @@ export function S(lang: Lang) {
     backfillSaved: L("✅ بک‌فیل پیش‌فرض ذخیره شد.", "✅ Default backfill saved."),
     quietSaved: L("✅ ساعت سکوت ذخیره شد.", "✅ Quiet hours saved."),
     quietDisabled: L("✅ ساعت سکوت خاموش شد.", "✅ Quiet hours disabled."),
+    globalFiltersTitle: L("🌐 فیلترهای سراسری", "🌐 Global Filters"),
+    globalFiltersSummary: (inc: number, exc: number) => L(`شامل: ${inc} | حذف: ${exc}`, `Include: ${inc} | Exclude: ${exc}`),
+    globalIncPrompt: L("کلمات شامل سراسری را بفرست (با کاما جدا کن).", "Send global include keywords (comma-separated)."),
+    globalExcPrompt: L("کلمات حذف سراسری را بفرست (با کاما جدا کن).", "Send global exclude keywords (comma-separated)."),
+    globalFiltersCleared: L("✅ فیلترهای سراسری پاک شد.", "✅ Global filters cleared."),
 
     chSettingsTitle: (u: string) => L(`⚙️ تنظیمات @${u}`, `⚙️ Settings @${u}`),
     statusLabel: L("وضعیت", "Status"),
@@ -456,6 +492,7 @@ export function settingsKeyboard(lang: Lang, prefs: UserPrefs, hasDest: boolean,
   rows.push([{ text: s.digest, callback_data: "set:digest" }]);
   rows.push([{ text: s.quiet, callback_data: "set:quiet" }]);
   rows.push([{ text: s.defaultBackfill, callback_data: "set:dbf" }]);
+  rows.push([{ text: s.globalFilters, callback_data: "set:gfilters" }]);
 
   if (canTest) rows.push([{ text: s.testDelivery, callback_data: "set:test" }]);
 
@@ -497,6 +534,17 @@ export function filtersKeyboard(lang: Lang, u: string) {
       [{ text: s.setInclude, callback_data: `f:set_inc:${u}` }, { text: s.setExclude, callback_data: `f:set_exc:${u}` }],
       [{ text: s.clearFilters, callback_data: `f:clear:${u}` }],
       [{ text: s.back, callback_data: `m:channel:${u}` }],
+    ],
+  };
+}
+
+export function globalFiltersKeyboard(lang: Lang) {
+  const s = S(lang);
+  return {
+    inline_keyboard: [
+      [{ text: s.setInclude, callback_data: "gf:set_inc" }, { text: s.setExclude, callback_data: "gf:set_exc" }],
+      [{ text: s.clearFilters, callback_data: "gf:clear" }],
+      [{ text: s.back, callback_data: "m:settings" }],
     ],
   };
 }

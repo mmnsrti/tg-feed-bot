@@ -68,7 +68,9 @@ CREATE TABLE IF NOT EXISTS user_prefs (
   quiet_start INTEGER NOT NULL DEFAULT -1,
   quiet_end INTEGER NOT NULL DEFAULT -1,
   post_style TEXT NOT NULL DEFAULT 'rich',
-  full_text_style TEXT NOT NULL DEFAULT 'quote'
+  full_text_style TEXT NOT NULL DEFAULT 'quote',
+  global_include_keywords TEXT NOT NULL DEFAULT '[]',
+  global_exclude_keywords TEXT NOT NULL DEFAULT '[]'
 );
 
 -- scraped cache for digest mode

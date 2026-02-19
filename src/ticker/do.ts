@@ -461,6 +461,8 @@ export async function sendDigestForUser(env: Env, userId: number, force = false)
   const prefs = await ensurePrefs(env.DB, userId);
   const dest = await getDestination(env.DB, userId);
   if (!dest?.verified) return;
+  const globalInclude = safeParseKeywords(prefs.global_include_keywords);
+  const globalExclude = safeParseKeywords(prefs.global_exclude_keywords);
 
   const subs = await env.DB
     .prepare("SELECT username, include_keywords, exclude_keywords FROM user_sources WHERE user_id=? AND mode='digest' AND paused=0")
@@ -480,8 +482,8 @@ export async function sendDigestForUser(env: Env, userId: number, force = false)
 
   for (const s of subs.results) {
     const u = String(s.username);
-    const include = safeParseKeywords(s.include_keywords);
-    const exclude = safeParseKeywords(s.exclude_keywords);
+    const include = [...globalInclude, ...safeParseKeywords(s.include_keywords)];
+    const exclude = [...globalExclude, ...safeParseKeywords(s.exclude_keywords)];
 
     const rows = await env.DB
       .prepare("SELECT username, post_id, link, text FROM scraped_posts WHERE username=? AND scraped_at > ? ORDER BY post_id DESC LIMIT 20")
@@ -600,6 +602,7 @@ export async function runScrapeTick(env: Env, storage: StorageLike) {
           )
           .bind(username)
           .all<any>();
+        const prefsCache = new Map<number, { prefs: UserPrefs; globalInclude: string[]; globalExclude: string[] }>();
 
         for (const post of newPosts) {
           for (const s of subs.results) {
@@ -609,11 +612,22 @@ export async function runScrapeTick(env: Env, storage: StorageLike) {
             if (Number(s.paused) === 1) continue;
             if (String(s.mode) !== "realtime") continue;
 
-            const prefs = await ensurePrefs(env.DB, userId);
+            let cached = prefsCache.get(userId);
+            if (!cached) {
+              const prefs = await ensurePrefs(env.DB, userId);
+              cached = {
+                prefs,
+                globalInclude: safeParseKeywords(prefs.global_include_keywords),
+                globalExclude: safeParseKeywords(prefs.global_exclude_keywords),
+              };
+              prefsCache.set(userId, cached);
+            }
+
+            const prefs = cached.prefs;
             if (!prefs.realtime_enabled) continue;
 
-            const include = safeParseKeywords(s.include_keywords);
-            const exclude = safeParseKeywords(s.exclude_keywords);
+            const include = [...cached.globalInclude, ...safeParseKeywords(s.include_keywords)];
+            const exclude = [...cached.globalExclude, ...safeParseKeywords(s.exclude_keywords)];
             if (!textPassesFilters(post.text || "", include, exclude)) continue;
 
             await deliverRealtime(env, userId, destChatId, username, s.label ?? null, post, prefs).catch(() => {});

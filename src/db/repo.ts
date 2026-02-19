@@ -41,8 +41,9 @@ export async function ensurePrefs(db: D1Database, userId: number): Promise<UserP
     .prepare(
       `INSERT OR IGNORE INTO user_prefs(
         user_id, lang, digest_hours, last_digest_at, realtime_enabled, updated_at,
-        default_backfill_n, quiet_start, quiet_end, post_style, full_text_style
-      ) VALUES(?, 'fa', 6, 0, 1, ?, 0, -1, -1, 'rich', 'quote')`
+        default_backfill_n, quiet_start, quiet_end, post_style, full_text_style,
+        global_include_keywords, global_exclude_keywords
+      ) VALUES(?, 'fa', 6, 0, 1, ?, 0, -1, -1, 'rich', 'quote', '[]', '[]')`
     )
     .bind(userId, nowSec())
     .run();
@@ -50,7 +51,8 @@ export async function ensurePrefs(db: D1Database, userId: number): Promise<UserP
   const row = await db
     .prepare(
       `SELECT lang, digest_hours, last_digest_at, realtime_enabled,
-              default_backfill_n, quiet_start, quiet_end, post_style, full_text_style
+              default_backfill_n, quiet_start, quiet_end, post_style, full_text_style,
+              global_include_keywords, global_exclude_keywords
        FROM user_prefs WHERE user_id=?`
     )
     .bind(userId)
@@ -70,6 +72,8 @@ export async function ensurePrefs(db: D1Database, userId: number): Promise<UserP
     quiet_end: Number(row?.quiet_end ?? -1),
     post_style,
     full_text_style,
+    global_include_keywords: String(row?.global_include_keywords || "[]"),
+    global_exclude_keywords: String(row?.global_exclude_keywords || "[]"),
   };
 }
 
@@ -84,7 +88,8 @@ export async function setPrefs(db: D1Database, userId: number, patch: Partial<Us
     .prepare(
       `UPDATE user_prefs SET
         lang=?, digest_hours=?, last_digest_at=?, realtime_enabled=?, updated_at=?,
-        default_backfill_n=?, quiet_start=?, quiet_end=?, post_style=?, full_text_style=?
+        default_backfill_n=?, quiet_start=?, quiet_end=?, post_style=?, full_text_style=?,
+        global_include_keywords=?, global_exclude_keywords=?
        WHERE user_id=?`
     )
     .bind(
@@ -98,6 +103,8 @@ export async function setPrefs(db: D1Database, userId: number, patch: Partial<Us
       Number(next.quiet_end ?? -1),
       post_style,
       full_text_style,
+      String(next.global_include_keywords || "[]"),
+      String(next.global_exclude_keywords || "[]"),
       userId
     )
     .run();
