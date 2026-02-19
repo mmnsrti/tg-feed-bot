@@ -1,6 +1,7 @@
 ﻿import { Env, Lang, ScrapedPost, UserPrefs } from "../types";
 import { tg } from "./client";
 import { S, backKeyboard, backfillKeyboard, cancelKeyboard, channelKeyboard, destinationManageKeyboard, filtersKeyboard, followMoreKeyboard, homeKeyboard, settingsKeyboard } from "./ui";
+import { parseChannelSettingsStartPayload } from "./postLinks";
 import {
   addUserSource,
   clearDestination,
@@ -764,6 +765,9 @@ export async function handlePrivateMessage(env: Env, msg: any) {
   if (cmd) {
     if (cmd.cmd === "/start") {
       await clearState(env.DB, userId);
+      const startArg = String(cmd.args?.[0] || "").trim();
+      const settingsUsername = parseChannelSettingsStartPayload(startArg);
+      if (settingsUsername) return showChannelSettings(env, userId, settingsUsername);
       return sendHome(env, userId);
     }
     if (cmd.cmd === "/help") return showHelp(env, userId);

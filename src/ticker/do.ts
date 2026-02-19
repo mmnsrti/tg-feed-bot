@@ -308,6 +308,7 @@ async function sendFeedPost(env: Env, destChatId: number, prefs: UserPrefs, user
         chat_id: destChatId,
         from_chat_id: `@${username}`,
         message_id: Number(post.postId),
+        reply_markup: rendered.reply_markup,
       });
       return;
     } catch (e: any) {
@@ -317,11 +318,32 @@ async function sendFeedPost(env: Env, destChatId: number, prefs: UserPrefs, user
 
     try {
       // Some message types/channels may fail copy but still allow forwarding as-is.
-      await tg(env, "forwardMessage", {
+      const forwarded = await tg(env, "forwardMessage", {
         chat_id: destChatId,
         from_chat_id: `@${username}`,
         message_id: Number(post.postId),
       });
+      const forwardedId = Number(forwarded?.message_id || 0);
+      let markupAttached = false;
+      if (forwardedId > 0) {
+        try {
+          await tg(env, "editMessageReplyMarkup", {
+            chat_id: destChatId,
+            message_id: forwardedId,
+            reply_markup: rendered.reply_markup,
+          });
+          markupAttached = true;
+        } catch {}
+      }
+      if (!markupAttached) {
+        await tg(env, "sendMessage", {
+          chat_id: destChatId,
+          text: rendered.text,
+          parse_mode: "HTML",
+          reply_markup: rendered.reply_markup,
+          link_preview_options: { is_disabled: true },
+        });
+      }
       return;
     } catch (e: any) {
       if (e instanceof TelegramError && isDestinationAccessError(e)) throw e;
