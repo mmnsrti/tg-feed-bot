@@ -408,35 +408,54 @@ export function renderAdminStatsPage(adminKeyFromUrl: string) {
   <title>TG Feed Bot Stats</title>
   <style>
     :root {
-      --bg: #f6f8fc;
-      --panel: #ffffff;
-      --text: #182132;
-      --muted: #5d687c;
-      --line: #d7deea;
-      --good: #13824f;
-      --warn: #a06000;
-      --bad: #b32235;
+      --bg: #070d1a;
+      --bg-2: #0f1830;
+      --panel: #101b33;
+      --panel-2: #0e172b;
+      --text: #e5edff;
+      --muted: #91a3c9;
+      --line: #273659;
+      --accent: #66b2ff;
+      --accent-soft: rgba(102, 178, 255, 0.18);
+      --good: #4fdb99;
+      --warn: #ffc978;
+      --bad: #ff7d91;
+      --shadow: 0 20px 40px rgba(2, 6, 16, 0.35);
     }
     * { box-sizing: border-box; }
     body {
       margin: 0;
       font-family: "IBM Plex Sans", "Segoe UI", Tahoma, sans-serif;
       background:
-        radial-gradient(circle at top right, #e8efff, transparent 45%),
-        linear-gradient(180deg, #f9fbff 0%, var(--bg) 55%);
+        radial-gradient(circle at 8% -10%, #1f3362 0%, transparent 38%),
+        radial-gradient(circle at 92% -10%, #153b63 0%, transparent 40%),
+        linear-gradient(180deg, var(--bg-2) 0%, var(--bg) 60%);
       color: var(--text);
     }
     .wrap {
-      max-width: 1360px;
-      margin: 24px auto 40px;
-      padding: 0 16px;
+      max-width: 1500px;
+      margin: 20px auto 38px;
+      padding: 0 18px;
+    }
+    .head {
+      background: linear-gradient(180deg, rgba(18, 30, 55, 0.9), rgba(14, 24, 45, 0.9));
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 18px;
+      margin-bottom: 16px;
+      box-shadow: var(--shadow);
     }
     h1 {
-      margin: 0 0 8px;
+      margin: 0;
       font-size: 30px;
-      letter-spacing: 0.2px;
+      letter-spacing: 0.3px;
     }
     .muted {
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .subtitle {
+      margin-top: 6px;
       color: var(--muted);
       font-size: 13px;
     }
@@ -446,7 +465,7 @@ export function renderAdminStatsPage(adminKeyFromUrl: string) {
       justify-content: space-between;
       gap: 12px;
       flex-wrap: wrap;
-      margin-bottom: 6px;
+      margin-top: 12px;
     }
     .actions {
       display: flex;
@@ -454,39 +473,98 @@ export function renderAdminStatsPage(adminKeyFromUrl: string) {
       gap: 8px;
     }
     .btn {
-      border: 1px solid #c9d4e8;
-      background: #fff;
-      color: #1b2940;
+      border: 1px solid #2f4f86;
+      background: #152544;
+      color: #dbe7ff;
       border-radius: 8px;
-      padding: 7px 11px;
+      padding: 8px 12px;
       font-size: 12px;
       font-weight: 600;
       cursor: pointer;
+      transition: background-color 0.2s ease, border-color 0.2s ease;
     }
     .btn:hover {
-      background: #f5f8ff;
+      background: #1a315d;
+      border-color: #4f78be;
+    }
+    .btn:disabled {
+      opacity: 0.6;
+      cursor: wait;
     }
     .pill {
-      border: 1px solid #d8e1f1;
-      background: #f8fbff;
-      color: #41506a;
+      border: 1px solid #2a3f69;
+      background: #14213a;
+      color: #abc0eb;
       border-radius: 999px;
       padding: 5px 10px;
       font-size: 12px;
       font-weight: 600;
     }
+    .layout {
+      display: grid;
+      grid-template-columns: 220px minmax(0, 1fr);
+      gap: 16px;
+      align-items: start;
+    }
+    .nav {
+      position: sticky;
+      top: 14px;
+      border: 1px solid var(--line);
+      background: var(--panel-2);
+      border-radius: 14px;
+      padding: 12px;
+      box-shadow: var(--shadow);
+      display: grid;
+      gap: 8px;
+    }
+    .nav-tab {
+      width: 100%;
+      text-align: left;
+      border: 1px solid #2a3e66;
+      background: #121f38;
+      color: #b7c8ea;
+      border-radius: 10px;
+      padding: 10px 12px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+    }
+    .nav-tab:hover {
+      border-color: #42609a;
+      color: #d9e6ff;
+    }
+    .nav-tab.active {
+      background: var(--accent-soft);
+      border-color: #4d84ce;
+      color: #dff0ff;
+    }
+    .panels {
+      min-width: 0;
+    }
+    .panel {
+      display: none;
+    }
+    .panel.active {
+      display: block;
+      animation: panel-fade 0.2s ease;
+    }
+    @keyframes panel-fade {
+      from { opacity: 0; transform: translateY(6px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
     .grid {
       display: grid;
       gap: 14px;
-      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-      margin: 18px 0 20px;
+      grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+      margin: 0 0 16px;
     }
     .card {
       background: var(--panel);
       border: 1px solid var(--line);
-      border-radius: 12px;
+      border-radius: 14px;
       padding: 12px;
-      box-shadow: 0 1px 0 rgba(16, 24, 40, 0.04);
+      box-shadow: var(--shadow);
     }
     .k {
       color: var(--muted);
@@ -500,18 +578,19 @@ export function renderAdminStatsPage(adminKeyFromUrl: string) {
       font-weight: 700;
     }
     .section {
-      background: var(--panel);
+      background: linear-gradient(180deg, #111d36 0%, #101a2f 100%);
       border: 1px solid var(--line);
-      border-radius: 12px;
+      border-radius: 14px;
       margin-top: 14px;
       overflow: hidden;
+      box-shadow: var(--shadow);
     }
     .section h2 {
       margin: 0;
       padding: 12px 14px;
       font-size: 15px;
       border-bottom: 1px solid var(--line);
-      background: #f9fbff;
+      background: #121f3a;
     }
     .table-scroll {
       overflow-x: auto;
@@ -524,16 +603,16 @@ export function renderAdminStatsPage(adminKeyFromUrl: string) {
     }
     th, td {
       padding: 9px 12px;
-      border-bottom: 1px solid #edf1f8;
+      border-bottom: 1px solid #1f2f4f;
       vertical-align: top;
       text-align: left;
     }
     th { color: var(--muted); font-weight: 600; }
-    tbody tr:nth-child(even) { background: #fbfdff; }
-    tbody tr:hover { background: #f2f7ff; }
+    tbody tr:nth-child(even) { background: rgba(16, 26, 47, 0.36); }
+    tbody tr:hover { background: rgba(102, 178, 255, 0.08); }
     tr:last-child td { border-bottom: 0; }
     .username-link {
-      color: #1d4b99;
+      color: var(--accent);
       font-weight: 600;
       text-decoration: none;
     }
@@ -548,8 +627,8 @@ export function renderAdminStatsPage(adminKeyFromUrl: string) {
     .warn { color: var(--warn); }
     .bad { color: var(--bad); }
     code {
-      background: #f2f5fa;
-      border: 1px solid #e2e8f2;
+      background: #162543;
+      border: 1px solid #2b416c;
       border-radius: 6px;
       padding: 1px 5px;
     }
@@ -559,158 +638,203 @@ export function renderAdminStatsPage(adminKeyFromUrl: string) {
       margin-top: 10px;
       display: none;
     }
+    @media (max-width: 980px) {
+      .layout {
+        grid-template-columns: 1fr;
+      }
+      .nav {
+        position: static;
+        display: flex;
+        flex-wrap: wrap;
+      }
+      .nav-tab {
+        width: auto;
+        flex: 1 1 calc(50% - 8px);
+      }
+      .pill {
+        display: none;
+      }
+      .v {
+        font-size: 24px;
+      }
+      table {
+        min-width: 560px;
+      }
+    }
   </style>
 </head>
 <body>
   <div class="wrap">
-    <h1>TG Feed Bot Dashboard</h1>
-    <div class="topbar">
-      <div id="updated" class="muted">Loading...</div>
-      <div class="actions">
-        <button id="refresh-btn" class="btn">Refresh now</button>
-        <span id="refresh-note" class="pill">Auto refresh: 10s</span>
+    <div class="head">
+      <h1>TG Feed Bot Dashboard</h1>
+      <div class="subtitle">Dark mode, split by area: overview, source health, users, and queue pressure.</div>
+      <div class="topbar">
+        <div id="updated" class="muted">Loading...</div>
+        <div class="actions">
+          <button id="refresh-btn" class="btn">Refresh now</button>
+          <span id="refresh-note" class="pill">Auto refresh: 10s</span>
+        </div>
       </div>
     </div>
-    <div id="cards" class="grid"></div>
+    <div class="layout">
+      <nav class="nav" aria-label="Dashboard Sections">
+        <button type="button" class="nav-tab active" data-panel="overview">Overview</button>
+        <button type="button" class="nav-tab" data-panel="sources">Sources</button>
+        <button type="button" class="nav-tab" data-panel="users">Users</button>
+        <button type="button" class="nav-tab" data-panel="queue">Queue</button>
+      </nav>
 
-    <div class="section">
-      <h2>Ticker / Queue</h2>
-      <div class="table-scroll">
-      <table>
-        <thead>
-          <tr>
-            <th>Metric</th>
-            <th>Value</th>
-          </tr>
-        </thead>
-        <tbody id="ticker-body"></tbody>
-      </table>
-      </div>
-    </div>
+      <div class="panels">
+        <section id="panel-overview" class="panel active">
+          <div id="cards" class="grid"></div>
 
-    <div class="section">
-      <h2>Adoption / Preferences</h2>
-      <div class="table-scroll">
-      <table>
-        <thead>
-          <tr>
-            <th>Metric</th>
-            <th>Value</th>
-          </tr>
-        </thead>
-        <tbody id="adoption-body"></tbody>
-      </table>
-      </div>
-    </div>
+          <div class="section">
+            <h2>Ticker / Queue</h2>
+            <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Metric</th>
+                  <th>Value</th>
+                </tr>
+              </thead>
+              <tbody id="ticker-body"></tbody>
+            </table>
+            </div>
+          </div>
 
-    <div class="section">
-      <h2>Failing Sources</h2>
-      <div class="table-scroll">
-      <table>
-        <thead>
-          <tr>
-            <th>Username</th>
-            <th>Fail Count</th>
-            <th>Next Check</th>
-            <th>Last Error</th>
-            <th>Last Success</th>
-          </tr>
-        </thead>
-        <tbody id="failing-body"></tbody>
-      </table>
-      </div>
-    </div>
+          <div class="section">
+            <h2>Adoption / Preferences</h2>
+            <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Metric</th>
+                  <th>Value</th>
+                </tr>
+              </thead>
+              <tbody id="adoption-body"></tbody>
+            </table>
+            </div>
+          </div>
+        </section>
 
-    <div class="section">
-      <h2>Upcoming Checks</h2>
-      <div class="table-scroll">
-      <table>
-        <thead>
-          <tr>
-            <th>Username</th>
-            <th>Next Check</th>
-            <th>Every (sec)</th>
-            <th>Fail Count</th>
-            <th>Last Success</th>
-          </tr>
-        </thead>
-        <tbody id="next-body"></tbody>
-      </table>
-      </div>
-    </div>
+        <section id="panel-sources" class="panel">
+          <div class="section">
+            <h2>Failing Sources</h2>
+            <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Username</th>
+                  <th>Fail Count</th>
+                  <th>Next Check</th>
+                  <th>Last Error</th>
+                  <th>Last Success</th>
+                </tr>
+              </thead>
+              <tbody id="failing-body"></tbody>
+            </table>
+            </div>
+          </div>
 
-    <div class="section">
-      <h2>Top Sources by Subscribers</h2>
-      <div class="table-scroll">
-      <table>
-        <thead>
-          <tr>
-            <th>Username</th>
-            <th>Total Subs</th>
-            <th>Realtime</th>
-            <th>Digest</th>
-            <th>Paused</th>
-          </tr>
-        </thead>
-        <tbody id="top-sources-body"></tbody>
-      </table>
-      </div>
-    </div>
+          <div class="section">
+            <h2>Upcoming Checks</h2>
+            <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Username</th>
+                  <th>Next Check</th>
+                  <th>Every (sec)</th>
+                  <th>Fail Count</th>
+                  <th>Last Success</th>
+                </tr>
+              </thead>
+              <tbody id="next-body"></tbody>
+            </table>
+            </div>
+          </div>
 
-    <div class="section">
-      <h2>Top Users by Subscriptions</h2>
-      <div class="table-scroll">
-      <table>
-        <thead>
-          <tr>
-            <th>Username</th>
-            <th>Name</th>
-            <th>User ID</th>
-            <th>Total Subs</th>
-            <th>Active</th>
-            <th>Realtime</th>
-            <th>Digest</th>
-            <th>Destination</th>
-          </tr>
-        </thead>
-        <tbody id="top-users-body"></tbody>
-      </table>
-      </div>
-    </div>
+          <div class="section">
+            <h2>Top Sources by Subscribers</h2>
+            <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Username</th>
+                  <th>Total Subs</th>
+                  <th>Realtime</th>
+                  <th>Digest</th>
+                  <th>Paused</th>
+                </tr>
+              </thead>
+              <tbody id="top-sources-body"></tbody>
+            </table>
+            </div>
+          </div>
+        </section>
 
-    <div class="section">
-      <h2>Recent Users</h2>
-      <div class="table-scroll">
-      <table>
-        <thead>
-          <tr>
-            <th>Username</th>
-            <th>Name</th>
-            <th>User ID</th>
-            <th>Last Seen</th>
-            <th>Joined</th>
-          </tr>
-        </thead>
-        <tbody id="recent-users-body"></tbody>
-      </table>
-      </div>
-    </div>
+        <section id="panel-users" class="panel">
+          <div class="section">
+            <h2>Top Users by Subscriptions</h2>
+            <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Username</th>
+                  <th>Name</th>
+                  <th>User ID</th>
+                  <th>Total Subs</th>
+                  <th>Active</th>
+                  <th>Realtime</th>
+                  <th>Digest</th>
+                  <th>Destination</th>
+                </tr>
+              </thead>
+              <tbody id="top-users-body"></tbody>
+            </table>
+            </div>
+          </div>
 
-    <div class="section">
-      <h2>Queue Hotspots</h2>
-      <div class="table-scroll">
-      <table>
-        <thead>
-          <tr>
-            <th>Username</th>
-            <th>Queued</th>
-            <th>Affected Users</th>
-            <th>Oldest</th>
-            <th>Newest</th>
-          </tr>
-        </thead>
-        <tbody id="queue-hotspots-body"></tbody>
-      </table>
+          <div class="section">
+            <h2>Recent Users</h2>
+            <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Username</th>
+                  <th>Name</th>
+                  <th>User ID</th>
+                  <th>Last Seen</th>
+                  <th>Joined</th>
+                </tr>
+              </thead>
+              <tbody id="recent-users-body"></tbody>
+            </table>
+            </div>
+          </div>
+        </section>
+
+        <section id="panel-queue" class="panel">
+          <div class="section">
+            <h2>Queue Hotspots</h2>
+            <div class="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Username</th>
+                  <th>Queued</th>
+                  <th>Affected Users</th>
+                  <th>Oldest</th>
+                  <th>Newest</th>
+                </tr>
+              </thead>
+              <tbody id="queue-hotspots-body"></tbody>
+            </table>
+            </div>
+          </div>
+        </section>
       </div>
     </div>
 
@@ -719,6 +843,24 @@ export function renderAdminStatsPage(adminKeyFromUrl: string) {
 
   <script>
     const statsUrl = ${JSON.stringify(statsUrl)};
+    const validPanels = new Set(["overview", "sources", "users", "queue"]);
+    const navTabs = Array.from(document.querySelectorAll(".nav-tab"));
+
+    function setActivePanel(name) {
+      const panel = validPanels.has(name) ? name : "overview";
+      for (const tab of navTabs) {
+        const isActive = tab.dataset.panel === panel;
+        tab.classList.toggle("active", isActive);
+      }
+      for (const section of document.querySelectorAll(".panel")) {
+        section.classList.toggle("active", section.id === "panel-" + panel);
+      }
+    }
+
+    for (const tab of navTabs) {
+      tab.addEventListener("click", () => setActivePanel(tab.dataset.panel || "overview"));
+    }
+    setActivePanel("overview");
 
     function setText(id, text) {
       const el = document.getElementById(id);
