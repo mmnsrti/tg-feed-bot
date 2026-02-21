@@ -190,15 +190,105 @@ function normalizeSearchQuery(input: string) {
   return s;
 }
 
+function normalizeKeyword(input: string) {
+  return String(input || "").trim().replace(/\s+/g, " ");
+}
+
+function dedupeKeywords(keywords: string[], limit = Number.POSITIVE_INFINITY) {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of keywords) {
+    const kw = normalizeKeyword(raw);
+    if (!kw) continue;
+    const key = kw.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(kw);
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
 function parseKeywords(raw: any): string[] {
   try {
     if (!raw) return [];
     const arr = JSON.parse(String(raw));
     if (!Array.isArray(arr)) return [];
-    return arr.map((x) => String(x).trim()).filter(Boolean);
+    return dedupeKeywords(arr.map((x) => String(x)));
   } catch {
     return [];
   }
+}
+
+type KeywordEdit = {
+  mode: "replace" | "patch";
+  add: string[];
+  remove: string[];
+  clear: boolean;
+};
+
+function splitKeywordTokens(input: string) {
+  return String(input || "")
+    .split(/[,\n،;]+/g)
+    .map((x) => x.trim())
+    .filter(Boolean);
+}
+
+function parseKeywordEditInput(input: string): KeywordEdit {
+  const raw = String(input || "").trim();
+  if (!raw || /^(?:clear|پاک)$/i.test(raw)) {
+    return { mode: "replace", add: [], remove: [], clear: true };
+  }
+
+  const tokens = splitKeywordTokens(raw);
+  const addRaw: string[] = [];
+  const removeRaw: string[] = [];
+  let hasPrefixedOps = false;
+
+  for (const token of tokens) {
+    if (token.startsWith("+") || token.startsWith("-")) {
+      hasPrefixedOps = true;
+      const body = normalizeKeyword(token.slice(1));
+      if (!body) continue;
+      if (token.startsWith("+")) addRaw.push(body);
+      else removeRaw.push(body);
+      continue;
+    }
+    addRaw.push(token);
+  }
+
+  if (!hasPrefixedOps) {
+    return { mode: "replace", add: dedupeKeywords(addRaw), remove: [], clear: false };
+  }
+
+  return {
+    mode: "patch",
+    add: dedupeKeywords(addRaw),
+    remove: dedupeKeywords(removeRaw),
+    clear: false,
+  };
+}
+
+function applyKeywordEdit(current: string[], input: string, limit: number): string[] {
+  const edit = parseKeywordEditInput(input);
+  if (edit.mode === "replace") {
+    if (edit.clear) return [];
+    return dedupeKeywords(edit.add, limit);
+  }
+
+  const base = dedupeKeywords(current);
+  const removeSet = new Set(edit.remove.map((x) => x.toLowerCase()));
+  const out = base.filter((x) => !removeSet.has(x.toLowerCase()));
+  const seen = new Set(out.map((x) => x.toLowerCase()));
+
+  for (const kw of edit.add) {
+    const key = kw.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(kw);
+    if (out.length >= limit) break;
+  }
+  return out.slice(0, limit);
 }
 
 function extractUsernamesFromText(input: string): { usernames: string[]; invalid: string[] } {
@@ -419,7 +509,19 @@ async function showChannelSettings(env: Env, userId: number, username: string, m
 
 async function showFilters(env: Env, userId: number, username: string, message_id?: number) {
   const prefs = await ensurePrefs(env.DB, userId);
-  await sendOrEdit(env, { chat_id: userId, message_id, text: S(prefs.lang).filtersTitle(username), reply_markup: filtersKeyboard(prefs.lang, username) });
+  const s = S(prefs.lang);
+  const sub = await getUserSource(env.DB, userId, username);
+  const include = parseKeywords(sub?.include_keywords);
+  const exclude = parseKeywords(sub?.exclude_keywords);
+  const text = [
+    s.filtersTitle(username),
+    "",
+    `${s.includeLabel}: ${include.length ? include.join(", ") : "—"}`,
+    `${s.excludeLabel}: ${exclude.length ? exclude.join(", ") : "—"}`,
+    "",
+    s.filtersEditHint,
+  ].join("\n");
+  await sendOrEdit(env, { chat_id: userId, message_id, text, reply_markup: filtersKeyboard(prefs.lang, username) });
 }
 
 async function showGlobalFilters(env: Env, userId: number, message_id?: number) {
@@ -435,6 +537,8 @@ async function showGlobalFilters(env: Env, userId: number, message_id?: number) 
     `${s.globalFiltersSummary(include.length, exclude.length)}`,
     `${s.includeLabel}: ${include.length ? include.join(", ") : "—"}`,
     `${s.excludeLabel}: ${exclude.length ? exclude.join(", ") : "—"}`,
+    "",
+    s.filtersEditHint,
   ].join("\n");
 
   await sendOrEdit(env, { chat_id: userId, message_id, text, reply_markup: globalFiltersKeyboard(prefs.lang) });
@@ -980,30 +1084,33 @@ export async function handlePrivateMessage(env: Env, msg: any) {
 
   if (st?.state === "await_include_keywords") {
     const u = String(st.data?.username || "");
-    const arr = text.split(",").map((x) => x.trim()).filter(Boolean).slice(0, 40);
     const sub = await getUserSource(env.DB, userId, u);
+    const include = parseKeywords(sub?.include_keywords);
     const exclude = sub ? parseKeywords(sub.exclude_keywords) : [];
-    await updateUserSourceFilters(env.DB, userId, u, arr, exclude);
+    const nextInclude = applyKeywordEdit(include, text, 40);
+    await updateUserSourceFilters(env.DB, userId, u, nextInclude, exclude);
     await clearState(env.DB, userId);
-    return showChannelSettings(env, userId, u);
+    return showFilters(env, userId, u);
   }
 
   if (st?.state === "await_exclude_keywords") {
     const u = String(st.data?.username || "");
-    const arr = text.split(",").map((x) => x.trim()).filter(Boolean).slice(0, 40);
     const sub = await getUserSource(env.DB, userId, u);
-    const include = sub ? parseKeywords(sub.include_keywords) : [];
-    await updateUserSourceFilters(env.DB, userId, u, include, arr);
+    const include = parseKeywords(sub?.include_keywords);
+    const exclude = parseKeywords(sub?.exclude_keywords);
+    const nextExclude = applyKeywordEdit(exclude, text, 40);
+    await updateUserSourceFilters(env.DB, userId, u, include, nextExclude);
     await clearState(env.DB, userId);
-    return showChannelSettings(env, userId, u);
+    return showFilters(env, userId, u);
   }
 
   if (st?.state === "await_global_include_keywords") {
-    const include = text.split(",").map((x) => x.trim()).filter(Boolean).slice(0, 80);
     const cur = await ensurePrefs(env.DB, userId);
+    const include = parseKeywords(cur.global_include_keywords);
     const exclude = parseKeywords(cur.global_exclude_keywords);
+    const nextInclude = applyKeywordEdit(include, text, 80);
     await setPrefs(env.DB, userId, {
-      global_include_keywords: JSON.stringify(include),
+      global_include_keywords: JSON.stringify(nextInclude),
       global_exclude_keywords: JSON.stringify(exclude),
     });
     await clearState(env.DB, userId);
@@ -1011,12 +1118,13 @@ export async function handlePrivateMessage(env: Env, msg: any) {
   }
 
   if (st?.state === "await_global_exclude_keywords") {
-    const exclude = text.split(",").map((x) => x.trim()).filter(Boolean).slice(0, 80);
     const cur = await ensurePrefs(env.DB, userId);
     const include = parseKeywords(cur.global_include_keywords);
+    const exclude = parseKeywords(cur.global_exclude_keywords);
+    const nextExclude = applyKeywordEdit(exclude, text, 80);
     await setPrefs(env.DB, userId, {
       global_include_keywords: JSON.stringify(include),
-      global_exclude_keywords: JSON.stringify(exclude),
+      global_exclude_keywords: JSON.stringify(nextExclude),
     });
     await clearState(env.DB, userId);
     return showGlobalFilters(env, userId);
