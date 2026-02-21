@@ -194,8 +194,14 @@ export function S(lang: Lang) {
     quietDisabled: L("✅ ساعت سکوت خاموش شد.", "✅ Quiet hours disabled."),
     globalFiltersTitle: L("🌐 فیلترهای سراسری", "🌐 Global Filters"),
     globalFiltersSummary: (inc: number, exc: number) => L(`شامل: ${inc} | حذف: ${exc}`, `Include: ${inc} | Exclude: ${exc}`),
-    globalIncPrompt: L("کلمات شامل سراسری را بفرست (با کاما جدا کن).", "Send global include keywords (comma-separated)."),
-    globalExcPrompt: L("کلمات حذف سراسری را بفرست (با کاما جدا کن).", "Send global exclude keywords (comma-separated)."),
+    globalIncPrompt: L(
+      "کلمات شامل سراسری را بفرست.\nجایگزینی: با کاما جدا کن.\nافزودن/حذف: +کلمه یا -کلمه.\nپاک‌کردن کامل: clear",
+      "Send global include keywords.\nReplace: comma-separated.\nAdd/remove: +word or -word.\nClear all: clear"
+    ),
+    globalExcPrompt: L(
+      "کلمات حذف سراسری را بفرست.\nجایگزینی: با کاما جدا کن.\nافزودن/حذف: +کلمه یا -کلمه.\nپاک‌کردن کامل: clear",
+      "Send global exclude keywords.\nReplace: comma-separated.\nAdd/remove: +word or -word.\nClear all: clear"
+    ),
     globalFiltersCleared: L("✅ فیلترهای سراسری پاک شد.", "✅ Global filters cleared."),
 
     chSettingsTitle: (u: string) => L(`⚙️ تنظیمات @${u}`, `⚙️ Settings @${u}`),
@@ -220,8 +226,20 @@ export function S(lang: Lang) {
     setInclude: L("➕ شامل", "➕ Include"),
     setExclude: L("➖ حذف", "➖ Exclude"),
     clearFilters: L("🧹 پاک کردن فیلترها", "🧹 Clear filters"),
-    incPrompt: (u: string) => L(`کلمات شامل برای @${u} را بفرست (با کاما جدا کن).`, `Send include keywords for @${u} (comma-separated).`),
-    excPrompt: (u: string) => L(`کلمات حذف برای @${u} را بفرست (با کاما جدا کن).`, `Send exclude keywords for @${u} (comma-separated).`),
+    filtersEditHint: L(
+      "جایگزینی: کلمات را با کاما بفرست | افزودن/حذف: +کلمه یا -کلمه | پاک‌کردن: clear",
+      "Replace: comma-separated keywords | Add/remove: +word or -word | Clear: clear"
+    ),
+    incPrompt: (u: string) =>
+      L(
+        `کلمات شامل برای @${u} را بفرست.\nجایگزینی: با کاما جدا کن.\nافزودن/حذف: +کلمه یا -کلمه.\nپاک‌کردن کامل: clear`,
+        `Send include keywords for @${u}.\nReplace: comma-separated.\nAdd/remove: +word or -word.\nClear all: clear.`
+      ),
+    excPrompt: (u: string) =>
+      L(
+        `کلمات حذف برای @${u} را بفرست.\nجایگزینی: با کاما جدا کن.\nافزودن/حذف: +کلمه یا -کلمه.\nپاک‌کردن کامل: clear`,
+        `Send exclude keywords for @${u}.\nReplace: comma-separated.\nAdd/remove: +word or -word.\nClear all: clear.`
+      ),
 
     testOk: L("✅ تست ارسال انجام شد.", "✅ Delivery test succeeded."),
 
