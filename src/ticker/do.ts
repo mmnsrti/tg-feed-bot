@@ -4,6 +4,7 @@ import { renderDestinationPost, t } from "../telegram/ui";
 import { clamp, ensurePrefs, ensureSource, getDestination, markDestinationBad, nowSec, setPrefs } from "../db/repo";
 import { fetchTme, scrapeTmePreview } from "../scraper/tme";
 import { shouldStoreScrapedPosts } from "../config";
+import { MAIN_CHANNEL_USERNAME } from "../telegram/postLinks";
 
 const FIRST_SYNC_LIMIT = 5;
 
@@ -147,6 +148,26 @@ function safeParseMediaJson(raw: any): MediaItem[] {
     return out;
   } catch {
     return [];
+  }
+}
+
+type MainChannelFollowState = "member" | "not_member" | "unknown";
+
+function parseMainChannelFollowState(status: string): MainChannelFollowState {
+  const normalized = String(status || "").toLowerCase();
+  if (normalized === "creator" || normalized === "administrator" || normalized === "member" || normalized === "restricted") {
+    return "member";
+  }
+  if (normalized === "left" || normalized === "kicked") return "not_member";
+  return "unknown";
+}
+
+async function getMainChannelFollowState(env: Env, userId: number): Promise<MainChannelFollowState> {
+  try {
+    const member = await tg(env, "getChatMember", { chat_id: `@${MAIN_CHANNEL_USERNAME}`, user_id: userId });
+    return parseMainChannelFollowState(String(member?.status || ""));
+  } catch {
+    return "unknown";
   }
 }
 
@@ -540,6 +561,14 @@ async function pMapLimit<T, R>(items: T[], limit: number, fn: (x: T) => Promise<
 export async function runScrapeTick(env: Env, storage: StorageLike) {
   const storeScraped = shouldStoreScrapedPosts(env);
   const now = nowSec();
+  const followCache = new Map<number, MainChannelFollowState>();
+
+  const ensureFollower = async (userId: number) => {
+    if (followCache.has(userId)) return followCache.get(userId) !== "not_member";
+    const followState = await getMainChannelFollowState(env, userId);
+    followCache.set(userId, followState);
+    return followState !== "not_member";
+  };
 
   const rows = await env.DB
     .prepare(
@@ -609,6 +638,8 @@ export async function runScrapeTick(env: Env, storage: StorageLike) {
             const userId = Number(s.user_id);
             const destChatId = Number(s.dest_chat_id);
 
+            if (!(await ensureFollower(userId))) continue;
+
             if (Number(s.paused) === 1) continue;
             if (String(s.mode) !== "realtime") continue;
 
@@ -676,6 +707,7 @@ export async function runScrapeTick(env: Env, storage: StorageLike) {
   const queuedUsers = await env.DB.prepare("SELECT DISTINCT user_id FROM queued_realtime").all<any>();
   for (const r of queuedUsers.results || []) {
     const userId = Number(r.user_id);
+    if (!(await ensureFollower(userId))) continue;
     const prefs = await ensurePrefs(env.DB, userId);
     await flushQueuedRealtime(env, userId, prefs).catch(() => {});
   }
@@ -683,7 +715,9 @@ export async function runScrapeTick(env: Env, storage: StorageLike) {
   if (storeScraped) {
     const digestUsers = await env.DB.prepare("SELECT DISTINCT user_id FROM user_sources WHERE mode='digest' AND paused=0").all<any>();
     for (const r of digestUsers.results || []) {
-      await sendDigestForUser(env, Number(r.user_id), false).catch(() => {});
+      const userId = Number(r.user_id);
+      if (!(await ensureFollower(userId))) continue;
+      await sendDigestForUser(env, userId, false).catch(() => {});
     }
   }
 }
