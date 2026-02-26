@@ -105,9 +105,47 @@ export function S(lang: Lang) {
     alreadyLabel: L("قبلا اضافه شده", "Already"),
     failedLabel: L("ناموفق", "Failed"),
     invalidLabel: L("نامعتبر", "Invalid"),
+    firstFollowBackfillBoost: (n: number) =>
+      L(
+        `🚀 برای اینکه سریع خروجی ببینی، برای اولین کانال ${n} پست آخر هم ارسال شد.`,
+        `🚀 To speed up your first value, I also sent the last ${n} posts for your first channel.`
+      ),
     followMoreHint: L("یکی دیگه بفرست یا /done", "Send another or /done"),
     addAnother: L("➕ افزودن بیشتر", "➕ Add another"),
     addAll: L("✅ افزودن همه", "✅ Add all"),
+    onboardingWizardTitle: L("🧭 راه‌اندازی سریع", "🧭 Quick Setup Wizard"),
+    onboardingWizardBody: L(
+      "۳ قدم کوتاه تا فعال شدن کامل فید:",
+      "3 short steps to fully activate your feed:"
+    ),
+    onboardingTitle: L("📈 پیشرفت راه‌اندازی", "📈 Setup Progress"),
+    onboardingProgress: (done: number, total: number) => L(`مرحله ${done}/${total} کامل`, `Step ${done}/${total} complete`),
+    onboardingStepDest: (done: boolean) =>
+      L(
+        `${done ? "✅" : "⬜️"} 1/3 تنظیم و تأیید کانال مقصد`,
+        `${done ? "✅" : "⬜️"} 1/3 Set and verify destination`
+      ),
+    onboardingStepFollow: (done: boolean) =>
+      L(
+        `${done ? "✅" : "⬜️"} 2/3 دنبال کردن اولین کانال`,
+        `${done ? "✅" : "⬜️"} 2/3 Follow your first channel`
+      ),
+    onboardingStepDelivery: (done: boolean) =>
+      L(
+        `${done ? "✅" : "⬜️"} 3/3 دریافت اولین خروجی`,
+        `${done ? "✅" : "⬜️"} 3/3 Receive your first delivery`
+      ),
+    onboardingNextLabel: L("گام بعدی", "Next step"),
+    onboardingNextDest: L("کانال مقصد را تنظیم کن.", "Set your destination channel."),
+    onboardingNextFollow: L("اولین کانال را اضافه کن.", "Add your first channel."),
+    onboardingNextDelivery: L(
+      "منتظر اولین پست بمان یا برای سریع‌تر شدن، یک کانال دیگر اضافه کن.",
+      "Wait for the first delivered post, or add one more channel to speed it up."
+    ),
+    onboardingActionSetDest: L("🎯 مرحله ۱: تنظیم مقصد", "🎯 Step 1: Set destination"),
+    onboardingActionFollowFirst: L("➕ مرحله ۲: افزودن اولین کانال", "➕ Step 2: Add first channel"),
+    onboardingActionSpeedUp: L("⚡ سریع‌ترش کن: افزودن کانال", "⚡ Speed up: add a channel"),
+    onboardingActionOpenHome: L("🏠 ورود به داشبورد", "🏠 Open dashboard"),
     commandsText: L(
       [
         "⌨️ دستورات",
