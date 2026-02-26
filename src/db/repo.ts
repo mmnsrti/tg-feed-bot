@@ -178,6 +178,11 @@ export async function countUserSources(db: D1Database, userId: number): Promise<
   return Number(row?.n ?? 0);
 }
 
+export async function hasAnyDelivery(db: D1Database, userId: number): Promise<boolean> {
+  const row = await db.prepare("SELECT 1 AS ok FROM deliveries WHERE user_id=? LIMIT 1").bind(userId).first<any>();
+  return !!row?.ok;
+}
+
 export async function listUserSources(db: D1Database, userId: number, limit: number, offset: number): Promise<UserSourceRow[]> {
   const rows = await db
     .prepare(

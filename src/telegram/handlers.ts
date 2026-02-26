@@ -26,6 +26,7 @@ import {
   getDestination,
   getState,
   getUserSource,
+  hasAnyDelivery,
   listUserSources,
   nowSec,
   setDestinationVerified,
@@ -365,12 +366,91 @@ function extractUsernamesFromText(input: string): { usernames: string[]; invalid
   return { usernames: Array.from(usernames), invalid: Array.from(invalid) };
 }
 
+type OnboardingStatus = {
+  destinationReady: boolean;
+  followedAny: boolean;
+  hasDelivery: boolean;
+  done: number;
+  total: number;
+  complete: boolean;
+  next: "dest" | "follow" | "delivery" | null;
+};
+
+function buildOnboardingStatus(destinationReady: boolean, followedCount: number, hasDelivery: boolean): OnboardingStatus {
+  const followedAny = followedCount > 0;
+  const done = Number(destinationReady) + Number(followedAny) + Number(hasDelivery);
+  const total = 3;
+
+  if (!destinationReady) {
+    return { destinationReady, followedAny, hasDelivery, done, total, complete: false, next: "dest" };
+  }
+  if (!followedAny) {
+    return { destinationReady, followedAny, hasDelivery, done, total, complete: false, next: "follow" };
+  }
+  if (!hasDelivery) {
+    return { destinationReady, followedAny, hasDelivery, done, total, complete: false, next: "delivery" };
+  }
+
+  return { destinationReady, followedAny, hasDelivery, done, total, complete: true, next: null };
+}
+
+async function getOnboardingStatus(env: Env, userId: number, destination: any | null, followedCount: number): Promise<OnboardingStatus> {
+  const hasDelivery = await hasAnyDelivery(env.DB, userId);
+  return buildOnboardingStatus(!!destination?.verified, followedCount, hasDelivery);
+}
+
+function onboardingNextStepText(s: ReturnType<typeof S>, status: OnboardingStatus): string {
+  if (status.next === "dest") return s.onboardingNextDest;
+  if (status.next === "follow") return s.onboardingNextFollow;
+  if (status.next === "delivery") return s.onboardingNextDelivery;
+  return "";
+}
+
+function onboardingProgressLines(s: ReturnType<typeof S>, status: OnboardingStatus): string[] {
+  const lines = [
+    s.onboardingTitle,
+    s.onboardingProgress(status.done, status.total),
+    s.onboardingStepDest(status.destinationReady),
+    s.onboardingStepFollow(status.followedAny),
+    s.onboardingStepDelivery(status.hasDelivery),
+  ];
+
+  if (!status.complete) lines.push(`${s.onboardingNextLabel}: ${onboardingNextStepText(s, status)}`);
+  return lines;
+}
+
+async function sendStartWizard(env: Env, userId: number, message_id?: number) {
+  const prefs = await ensurePrefs(env.DB, userId);
+  const dest = await getDestination(env.DB, userId);
+  const count = await countUserSources(env.DB, userId);
+  const s = S(prefs.lang);
+  const status = await getOnboardingStatus(env, userId, dest, count);
+
+  if (status.complete) return sendHome(env, userId, message_id);
+
+  const cta =
+    status.next === "dest"
+      ? { text: s.onboardingActionSetDest, callback_data: "m:newdest" }
+      : status.next === "follow"
+      ? { text: s.onboardingActionFollowFirst, callback_data: "m:follow" }
+      : { text: s.onboardingActionSpeedUp, callback_data: "m:follow" };
+
+  const text = [s.onboardingWizardTitle, "", s.onboardingWizardBody, "", ...onboardingProgressLines(s, status)].join("\n");
+
+  const reply_markup = {
+    inline_keyboard: [[cta], [{ text: s.onboardingActionOpenHome, callback_data: "m:home" }], [{ text: s.help, callback_data: "m:help" }]],
+  };
+
+  await sendOrEdit(env, { chat_id: userId, message_id, text, reply_markup });
+}
+
 /** ------------------- menus ------------------- */
 async function sendHome(env: Env, userId: number, message_id?: number) {
   const prefs = await ensurePrefs(env.DB, userId);
   const dest = await getDestination(env.DB, userId);
   const count = await countUserSources(env.DB, userId);
   const s = S(prefs.lang);
+  const onboarding = await getOnboardingStatus(env, userId, dest, count);
 
   const destStatus = !dest ? s.destNotSet : dest.verified ? s.destVerified : s.destNotVerified;
   const quiet = prefs.quiet_start < 0 || prefs.quiet_end < 0 ? s.quietOff : s.quietRange(prefs.quiet_start, prefs.quiet_end);
@@ -382,6 +462,7 @@ async function sendHome(env: Env, userId: number, message_id?: number) {
     `${s.realtimeLabel}: ${prefs.realtime_enabled ? s.realtimeOn : s.realtimeOff}`,
     `${s.quietLabel}: ${quiet}`,
     `${s.followedLabel}: ${count}`,
+    ...(onboarding.complete ? [] : ["", ...onboardingProgressLines(s, onboarding)]),
     "",
     s.homeHint,
   ].join("\n");
@@ -630,7 +711,8 @@ async function handleListSearch(env: Env, userId: number, query: string) {
 
 /** ------------------- follow input ------------------- */
 type FollowResultStatus = "ok" | "already" | "fetch_failed" | "couldnt_read";
-type FollowResult = { username: string; status: FollowResultStatus };
+type FollowResult = { username: string; status: FollowResultStatus; backfillN: number };
+type FollowOneOpts = { backfillN?: number };
 
 type FollowOpts = { batch?: boolean; mode?: "follow" | "import" };
 
@@ -641,22 +723,30 @@ type FollowConfirmState = {
   mode?: "follow" | "import";
 };
 
-async function followOneChannel(env: Env, userId: number, username: string, prefs: UserPrefs, destChatId: number): Promise<FollowResult> {
+async function followOneChannel(
+  env: Env,
+  userId: number,
+  username: string,
+  prefs: UserPrefs,
+  destChatId: number,
+  opts: FollowOneOpts = {}
+): Promise<FollowResult> {
   const existing = await getUserSource(env.DB, userId, username);
-  if (existing) return { username, status: "already" };
+  if (existing) return { username, status: "already", backfillN: 0 };
 
   let posts: ScrapedPost[] = [];
   try {
     const html = await fetchTme(username);
     posts = scrapeTmePreview(username, html);
-    if (!posts.length) return { username, status: "couldnt_read" };
+    if (!posts.length) return { username, status: "couldnt_read", backfillN: 0 };
   } catch {
-    return { username, status: "fetch_failed" };
+    return { username, status: "fetch_failed", backfillN: 0 };
   }
 
   await ensureSource(env.DB, username, MIN_POLL_SEC);
 
-  const backfillN = clamp(Number(prefs.default_backfill_n ?? 0), 0, 10);
+  const defaultBackfillN = clamp(Number(prefs.default_backfill_n ?? 0), 0, 10);
+  const backfillN = opts.backfillN === undefined ? defaultBackfillN : clamp(Number(opts.backfillN), 0, 10);
   await addUserSource(env.DB, userId, username, backfillN);
 
   const backfill = backfillN > 0 ? posts.slice(-backfillN) : [];
@@ -684,7 +774,7 @@ async function followOneChannel(env: Env, userId: number, username: string, pref
     .bind(latestId, nowSec(), nowSec() + MIN_POLL_SEC, MIN_POLL_SEC, nowSec(), username)
     .run();
 
-  return { username, status: "ok" };
+  return { username, status: "ok", backfillN };
 }
 
 async function processFollowUsernames(env: Env, userId: number, usernames: string[], invalid: string[] = [], opts: FollowOpts = {}) {
@@ -702,19 +792,30 @@ async function processFollowUsernames(env: Env, userId: number, usernames: strin
   const ok: string[] = [];
   const already: string[] = [];
   const failed: string[] = [];
+  const defaultBackfillN = clamp(Number(prefs.default_backfill_n ?? 0), 0, 10);
+  const startingFollowedCount = await countUserSources(env.DB, userId);
+  let firstFollowBoostPending = startingFollowedCount === 0;
+  let boostedBackfillN = 0;
 
   const destChatId = Number(dest.chat_id);
   for (const u of unique) {
-    const res = await followOneChannel(env, userId, u, prefs, destChatId);
+    const boostedN = firstFollowBoostPending ? Math.max(defaultBackfillN, 3) : undefined;
+    const res = await followOneChannel(env, userId, u, prefs, destChatId, { backfillN: boostedN });
     if (res.status === "ok") ok.push(u);
     else if (res.status === "already") already.push(u);
     else failed.push(u);
+
+    if (res.status === "ok" && firstFollowBoostPending) {
+      firstFollowBoostPending = false;
+      if (res.backfillN > defaultBackfillN) boostedBackfillN = res.backfillN;
+    }
   }
 
   const lines: string[] = [s.followSummaryTitle(ok.length, unique.length)];
   if (ok.length) lines.push(`${s.addedLabel}: ${ok.map((u) => `@${u}`).join(", ")}`);
   if (already.length) lines.push(`${s.alreadyLabel}: ${already.map((u) => `@${u}`).join(", ")}`);
   if (failed.length) lines.push(`${s.failedLabel}: ${failed.map((u) => `@${u}`).join(", ")}`);
+  if (boostedBackfillN > 0) lines.push(s.firstFollowBackfillBoost(boostedBackfillN));
   if (invalid.length) lines.push(`${s.invalidLabel}: ${invalid.slice(0, 10).join(", ")}`);
   if (opts.batch) lines.push("", s.followMoreHint);
 
@@ -1075,7 +1176,7 @@ export async function handlePrivateMessage(env: Env, msg: any) {
         }
         return showChannelSettings(env, userId, username);
       }
-      return sendHome(env, userId);
+      return sendStartWizard(env, userId);
     }
     if (cmd.cmd === "/help") return showHelp(env, userId);
     if (cmd.cmd === "/commands") {
