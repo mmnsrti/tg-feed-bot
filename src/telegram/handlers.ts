@@ -1,5 +1,5 @@
 ﻿import { Env, Lang, ScrapedPost, UserPrefs } from "../types";
-import { tg } from "./client";
+import { TelegramError, tg } from "./client";
 import {
   S,
   backKeyboard,
@@ -13,7 +13,7 @@ import {
   homeKeyboard,
   settingsKeyboard,
 } from "./ui";
-import { MAIN_CHANNEL_USERNAME, parseChannelSettingsStartPayload } from "./postLinks";
+import { MAIN_CHANNEL_USERNAME, channelUrl, parseChannelSettingsStartPayload } from "./postLinks";
 import {
   addUserSource,
   clearDestination,
@@ -105,6 +105,56 @@ async function isChannelAdmin(env: Env, channelChatId: number, userId: number): 
   } catch {
     return false;
   }
+}
+
+type MainChannelFollowState = "member" | "not_member" | "unknown";
+
+function parseMainChannelFollowState(status: string): MainChannelFollowState {
+  const normalized = String(status || "").toLowerCase();
+  if (normalized === "creator" || normalized === "administrator" || normalized === "member" || normalized === "restricted") {
+    return "member";
+  }
+  if (normalized === "left" || normalized === "kicked") return "not_member";
+  return "unknown";
+}
+
+async function getMainChannelFollowState(env: Env, userId: number): Promise<MainChannelFollowState> {
+  try {
+    const member = await tg(env, "getChatMember", { chat_id: `@${MAIN_CHANNEL_USERNAME}`, user_id: userId });
+    return parseMainChannelFollowState(String(member?.status || ""));
+  } catch (e: any) {
+    if (e instanceof TelegramError) {
+      console.log("main-channel follow check failed", userId, e.code, e.description);
+    } else {
+      console.log("main-channel follow check failed", userId, String(e?.message || e));
+    }
+    return "unknown";
+  }
+}
+
+function mainChannelRequiredKeyboard(lang: Lang) {
+  const s = S(lang);
+  return {
+    inline_keyboard: [
+      [{ text: s.joinMainChannel, url: channelUrl(MAIN_CHANNEL_USERNAME) }],
+      [{ text: s.checkMainChannelFollow, callback_data: "gate:check" }],
+    ],
+  };
+}
+
+async function ensureMainChannelFollow(env: Env, userId: number, lang: Lang): Promise<boolean> {
+  const followState = await getMainChannelFollowState(env, userId);
+  if (followState === "member") return true;
+  // Fail-open on unknown lookup errors to avoid false negatives.
+  if (followState === "unknown") return true;
+
+  const s = S(lang);
+  await tg(env, "sendMessage", {
+    chat_id: userId,
+    text: s.mustJoinMainChannel,
+    reply_markup: mainChannelRequiredKeyboard(lang),
+  });
+  return false;
 }
 
 function getChatPhotoFileId(chat: any): string | null {
@@ -747,6 +797,9 @@ export async function handleChannelPost(env: Env, msg: any) {
   if (!row) return;
 
   const userId = Number(row.user_id);
+  const prefs = await ensurePrefs(env.DB, userId);
+
+  if (!(await ensureMainChannelFollow(env, userId, prefs.lang))) return;
 
   await setDestinationVerified(env.DB, userId, chatId);
   await setDestinationPhotoFromMainChannelIfMissing(env, Number(chatId));
@@ -770,6 +823,14 @@ export async function handleCallback(env: Env, cq: any) {
   const message_id = cq?.message?.message_id as number | undefined;
 
   await tg(env, "answerCallbackQuery", { callback_query_id: cq.id });
+
+  if (data === "gate:check") {
+    if (!(await ensureMainChannelFollow(env, userId, prefs.lang))) return;
+    await clearState(env.DB, userId);
+    return sendHome(env, userId, message_id);
+  }
+
+  if (!(await ensureMainChannelFollow(env, userId, prefs.lang))) return;
 
   if (data === "m:home") {
     await clearState(env.DB, userId);
@@ -989,6 +1050,8 @@ export async function handlePrivateMessage(env: Env, msg: any) {
   });
   const prefs = await ensurePrefs(env.DB, userId);
   const s = S(prefs.lang);
+
+  if (!(await ensureMainChannelFollow(env, userId, prefs.lang))) return;
 
   const cmd = parseCmd(text);
   if (cmd) {

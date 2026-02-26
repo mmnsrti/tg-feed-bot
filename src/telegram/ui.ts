@@ -67,6 +67,20 @@ export function S(lang: Lang) {
       "⚠️ اول کانال مقصد را تنظیم کن تا بدانم پست‌ها را کجا بفرستم.",
       "⚠️ Set the destination first so I know where to send posts."
     ),
+    mustJoinMainChannel: L(
+      [
+        "🔒 برای استفاده از ربات باید اول کانال اصلی را دنبال کنی.",
+        "",
+        `کانال: @${MAIN_CHANNEL_USERNAME}`,
+      ].join("\n"),
+      [
+        "🔒 You need to follow the main channel before using this bot.",
+        "",
+        `Channel: @${MAIN_CHANNEL_USERNAME}`,
+      ].join("\n")
+    ),
+    joinMainChannel: L("📣 عضویت در کانال اصلی", "📣 Join main channel"),
+    checkMainChannelFollow: L("✅ عضو شدم", "✅ I joined"),
     sendUsername: L(
       "نام کاربری یا لینک کانال عمومی را بفرست (می‌توانی چندتا را با فاصله یا خط جدید بفرستی؛ کانال خصوصی پشتیبانی نمی‌شود):\nمثال: @uniflyio یا https://t.me/uniflyio\nیا یک پیام از کانال را فوروارد کن تا خودکار اضافه شود.",
       "Send a public channel username or link (you can send multiple separated by spaces or new lines; private channels aren't supported):\nExample: @uniflyio or https://t.me/uniflyio\nOr forward a message from a channel to add it automatically."
