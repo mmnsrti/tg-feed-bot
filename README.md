@@ -1,202 +1,241 @@
-# TG Feed Bot
+<p align="center">
+  <img src="./public/unifly_logo_option.png" alt="TG Feed Bot logo" width="120" />
+</p>
 
-A Telegram bot that mirrors posts from public Telegram channels into a destination channel.
+<h1 align="center">TG Feed Bot</h1>
 
-The bot runs on Cloudflare Workers + Durable Objects + D1.
+<p align="center">
+  Mirror public Telegram channel posts into your own destination channel with realtime delivery, digest summaries, filters, quiet hours, and a bilingual Telegram UI.
+</p>
 
-## Table of Contents
+<p align="center">
+  <img alt="Cloudflare Workers" src="https://img.shields.io/badge/Cloudflare-Workers-F38020?logo=cloudflare&logoColor=white" />
+  <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-5.x-3178C6?logo=typescript&logoColor=white" />
+  <img alt="Telegram Bot API" src="https://img.shields.io/badge/Telegram-Bot%20API-26A5E4?logo=telegram&logoColor=white" />
+  <img alt="D1" src="https://img.shields.io/badge/Database-Cloudflare%20D1-F38020" />
+  <img alt="License" src="https://img.shields.io/badge/License-ISC-lightgrey" />
+</p>
 
-1. Overview
-2. Features
-3. Architecture
-4. Tech Stack
-5. Project Structure
-6. Prerequisites
-7. Configurationa
-8. Database Setup
-9. Local Development
-10. Deploy to Cloudflare
-11. Telegram Webhook Setup
-12. Bot Usage Guide
-13. Filter Syntax
-14. Admin Endpoints
-15. Data Model
-16. Operations and Maintenance
-17. Troubleshooting
-18. Known Limitations
+---
 
-## Overview
+## ✨ What it does
 
-This service watches public channels on `t.me`, scrapes new posts, and sends them to each user's configured destination channel.
+**TG Feed Bot** watches public Telegram channels via `t.me/s/<channel>`, detects new posts, and republishes them into a verified destination channel. Each user can manage their own destination, followed channels, delivery mode, filters, quiet hours, and display preferences from inside Telegram.
 
-Key behavior:
-- Realtime mode: send posts shortly after they appear.
-- Digest mode: send periodic summary messages.
-- Per-channel and global include/exclude keyword filters.
-- Quiet hours queueing.
-- Per-channel backfill on follow.
-- Destination verification flow using a one-time claim token.
+The bot is designed to run serverlessly on **Cloudflare Workers**, using **Durable Objects** for the high-frequency ticker and **D1** for persistent state.
 
-## Features
+---
 
-- Multi-user support with isolated preferences.
-- Destination channel ownership/verification flow (`DEST <token>` message in channel).
-- Public channel follow/import from `@handle` and `t.me/...` links.
-- Per-channel settings include pause/resume, realtime/digest mode, label, include/exclude filters, and backfill count.
-- Global settings include language (`fa` / `en`), realtime on/off, digest interval, quiet hours (UTC), default backfill, and global include/exclude filters.
-- Post style (`rich` / `compact`) and full-text style (`quote` / `plain`).
-- Admin dashboard and JSON stats endpoints.
+## 🧭 Table of contents
 
-## Architecture
+- [Highlights](#-highlights)
+- [How it works](#-how-it-works)
+- [Tech stack](#-tech-stack)
+- [Quick start](#-quick-start)
+- [Configuration](#-configuration)
+- [Local development](#-local-development)
+- [Deploy](#-deploy)
+- [Telegram setup](#-telegram-setup)
+- [Bot commands](#-bot-commands)
+- [Admin endpoints](#-admin-endpoints)
+- [Project structure](#-project-structure)
+- [Documentation](#-documentation)
+- [Limitations](#-limitations)
+- [Security](#-security)
 
-1. Telegram sends updates to `POST /telegram`.
-2. Worker processes private messages, callbacks, and channel posts.
-3. Worker ensures a global Durable Object ticker is running.
-4. Ticker alarm runs every 5 seconds.
-5. Ticker scrapes due sources from `https://t.me/s/<username>`.
-6. New posts are filtered and delivered to subscribed destinations.
-7. Quiet-hour posts are queued and flushed later.
-8. Digest users receive summary messages on schedule.
+---
 
-### Delivery strategy
+## 🚀 Highlights
 
-For each post, the bot tries in this order:
-1. `copyMessage` (best fidelity)
-2. `forwardMessage`
-3. Fallback to direct media send (`sendPhoto`, `sendVideo`, etc.)
-4. Fallback to text message
+| Area | Capability |
+|---|---|
+| ⚡ Delivery | Realtime mirroring, digest summaries, quiet-hours queueing, duplicate protection |
+| 🎯 Destination setup | One-time `DEST <token>` claim flow for verified destination channels |
+| 🔎 Filtering | Per-channel and global include/exclude keyword filters |
+| 🧾 Content style | Rich or compact post style, quoted or plain full-text rendering |
+| 👥 Multi-user | Isolated destinations, subscriptions, preferences, and conversation state |
+| 🌐 Input formats | `@username`, `https://t.me/username`, batch imports, and forwarded channel messages |
+| 🛠 Operations | Admin dashboard, JSON stats, manual scrape trigger, ticker controls |
+| 🌍 UI language | Persian (`fa`) and English (`en`) bot menus and command descriptions |
 
-Duplicate sends are prevented with the `deliveries` table.
+---
 
-## Tech Stack
+## 🏗 How it works
 
-- Cloudflare Workers (Hono router)
-- Cloudflare Durable Objects (`Ticker`)
-- Cloudflare D1 (SQLite)
-- Telegram Bot API
-- TypeScript
-- pnpm
-
-## Project Structure
-
-- `src/index.ts`: Worker entrypoint, routes, ticker DO, admin routes.
-- `src/ticker/do.ts`: scrape loop, delivery logic, digest logic.
-- `src/scraper/tme.ts`: `t.me/s` scraper + media extraction.
-- `src/telegram/handlers.ts`: bot conversation and callback handling.
-- `src/telegram/ui.ts`: localized text and keyboards.
-- `src/telegram/client.ts`: Telegram API client with rate-limit retry.
-- `src/db/repo.ts`: DB helpers.
-- `src/db/schema.ts`: runtime schema upgrades (`schema_v` in `meta_kv`).
-- `src/admin/stats.ts`: admin metrics and HTML dashboard.
-- `schema.sql`: full base schema.
-- `wipe.sql`: data wipe script (keeps tables).
-- `scripts/poll.ts`: local polling bridge (Telegram getUpdates -> local `/telegram`).
-- `scripts/schedule.ts`: local scheduled trigger loop.
-
-## Prerequisites
-
-- Node.js 20+
-- pnpm 9+
-- Cloudflare account
-- Telegram bot token from BotFather
-
-## Configuration
-
-### Cloudflare bindings (`wrangler.toml`)
-
-Configured bindings:
-- D1 binding: `DB`
-- Durable Object binding: `TICKER` class `Ticker`
-- Cron trigger: every minute (used to ensure ticker is started)
-
-Ticker actual scrape cadence is every 5 seconds via Durable Object alarm.
-
-### Environment variables
-
-| Variable | Required | Purpose |
-|---|---|---|
-| `BOT_TOKEN` | Yes | Telegram Bot API token |
-| `WEBHOOK_SECRET` | Yes | Secret token checked on `/telegram` requests |
-| `ADMIN_KEY` | No | Admin route key (falls back to `WEBHOOK_SECRET` if missing) |
-| `STORE_SCRAPED_POSTS` | No | `true/1/yes` enables storing scraped posts (required for digest output) |
-
-### Bot/channel identity constants
-
-`src/telegram/postLinks.ts` includes:
-- `BOT_USERNAME`: used in deep links.
-- `MAIN_CHANNEL_USERNAME`: used in branding/footer links and destination photo copy source.
-
-If you run your own bot/brand, update both constants.
-
-### Local `.dev.vars` example
-
-```env
-BOT_TOKEN=<your_bot_token>
-WEBHOOK_SECRET=<random_secret>
-ADMIN_KEY=<optional_admin_key>
-STORE_SCRAPED_POSTS=true
+```mermaid
+flowchart LR
+  A[Telegram webhook<br/>POST /telegram] --> B[Cloudflare Worker<br/>Hono routes]
+  B --> C[(Cloudflare D1<br/>users, sources, prefs)]
+  B --> D[Durable Object<br/>Ticker]
+  E[Cloudflare cron<br/>every minute] --> D
+  D --> F[t.me/s scraper]
+  F --> G[Filter + dedupe]
+  G --> H{Delivery mode}
+  H -->|Realtime| I[Destination channel]
+  H -->|Quiet hours| J[(queued_realtime)]
+  H -->|Digest| K[(scraped_posts)]
+  J --> I
+  K --> I
 ```
 
-## Database Setup
+### Runtime flow
 
-Important: `ensureDbUpgrades()` applies incremental upgrades, but it is not a full bootstrap for an empty database. Initialize base tables from `schema.sql` first.
+1. Telegram sends bot updates to `POST /telegram`.
+2. The Worker handles private messages, inline callbacks, and channel posts.
+3. A Durable Object ticker runs every 5 seconds after it is started.
+4. The ticker scrapes due public channels from `https://t.me/s/<username>`.
+5. New posts are stored when enabled, filtered, deduplicated, and delivered.
+6. Quiet-hour posts are queued and flushed after the quiet window.
+7. Digest users receive summary messages on their configured interval.
 
-### Initialize local D1
+---
 
-```bash
-pnpm exec wrangler d1 execute tg_feed_bot --local --file=schema.sql
-```
+## 🧱 Tech stack
 
-### Initialize remote D1
+- **Cloudflare Workers** for the HTTP bot runtime
+- **Hono** for routing
+- **Cloudflare Durable Objects** for the global ticker/alarm loop
+- **Cloudflare D1** for SQLite-backed persistence
+- **Telegram Bot API** for bot commands, messages, webhooks, and channel delivery
+- **TypeScript** with `tsx`, `wrangler`, and `pnpm`
 
-```bash
-pnpm exec wrangler d1 execute tg_feed_bot --remote --file=schema.sql
-```
+---
 
-### Wipe data (keep schema)
+## ⚡ Quick start
 
-```bash
-pnpm exec wrangler d1 execute tg_feed_bot --local --file=wipe.sql
-# or --remote
-```
-
-## Local Development
-
-1. Install dependencies:
+### 1. Install dependencies
 
 ```bash
 pnpm install
 ```
 
-2. Set local env vars in `.dev.vars`.
+### 2. Create local environment variables
 
-3. Initialize local DB:
+```bash
+cp .dev.example.vars .dev.vars
+```
+
+Edit `.dev.vars`:
+
+```env
+BOT_TOKEN=<telegram_bot_token>
+WEBHOOK_SECRET=<random_webhook_secret>
+ADMIN_KEY=<optional_admin_key>
+STORE_SCRAPED_POSTS=true
+```
+
+### 3. Configure Cloudflare bindings
+
+```bash
+cp wrangler.example.toml wrangler.toml
+```
+
+Create a D1 database and copy its ID into `wrangler.toml`:
+
+```bash
+pnpm exec wrangler d1 create tg_feed_bot
+```
+
+### 4. Initialize the local database
 
 ```bash
 pnpm exec wrangler d1 execute tg_feed_bot --local --file=schema.sql
 ```
 
-4. Start worker:
+### 5. Start the Worker locally
 
 ```bash
 pnpm run dev
 ```
 
-5. For local update ingestion without public webhook, run polling bridge in a second terminal:
+### 6. In another terminal, bridge Telegram polling to local Worker
 
 ```bash
 pnpm run poll
 ```
 
-6. Optional local scheduler simulator in a third terminal:
+Now open your bot in Telegram and send `/start`.
+
+---
+
+## ⚙️ Configuration
+
+### Cloudflare bindings
+
+`wrangler.toml` must include:
+
+| Binding | Type | Used for |
+|---|---|---|
+| `DB` | D1 database | Users, destinations, sources, preferences, deliveries, queues |
+| `TICKER` | Durable Object | High-frequency scrape loop and ticker controls |
+| Cron trigger | `*/1 * * * *` | Keeps the ticker alive; the actual scrape loop runs by DO alarm |
+
+### Environment variables
+
+| Variable | Required | Default | Description |
+|---|---:|---|---|
+| `BOT_TOKEN` | Yes | — | Telegram Bot API token from BotFather |
+| `WEBHOOK_SECRET` | Yes | — | Shared secret checked on `POST /telegram` |
+| `ADMIN_KEY` | No | `WEBHOOK_SECRET` | Admin API/dashboard key |
+| `STORE_SCRAPED_POSTS` | No | disabled | Set `true`, `1`, or `yes` to store scraped posts for digest/backfill/queue rendering |
+
+### Branding constants
+
+Update these when running your own bot or channel brand:
+
+```ts
+// src/telegram/postLinks.ts
+export const MAIN_CHANNEL_USERNAME = "uniflyio";
+export const BOT_USERNAME = "unifly_io_bot";
+```
+
+More details: [Configuration Guide](./docs/CONFIGURATION.md)
+
+---
+
+## 🧑‍💻 Local development
+
+Run the Worker:
+
+```bash
+pnpm run dev
+```
+
+Run Telegram polling bridge:
+
+```bash
+pnpm run poll
+```
+
+Optionally simulate scheduled ticks locally:
 
 ```bash
 pnpm run schedule
 ```
 
-## Deploy to Cloudflare
+Useful local database commands:
 
-1. Set secrets:
+```bash
+# Initialize schema
+pnpm exec wrangler d1 execute tg_feed_bot --local --file=schema.sql
+
+# Wipe runtime data but keep tables
+pnpm exec wrangler d1 execute tg_feed_bot --local --file=wipe.sql
+```
+
+More details: [Development Guide](./docs/DEVELOPMENT.md)
+
+---
+
+## ☁️ Deploy
+
+### 1. Initialize remote D1 schema
+
+```bash
+pnpm exec wrangler d1 execute tg_feed_bot --remote --file=schema.sql
+```
+
+### 2. Add Worker secrets
 
 ```bash
 pnpm exec wrangler secret put BOT_TOKEN
@@ -205,21 +244,21 @@ pnpm exec wrangler secret put ADMIN_KEY
 pnpm exec wrangler secret put STORE_SCRAPED_POSTS
 ```
 
-2. Initialize remote DB (first deployment):
+For `STORE_SCRAPED_POSTS`, enter `true` if you want digest mode to work.
 
-```bash
-pnpm exec wrangler d1 execute tg_feed_bot --remote --file=schema.sql
-```
-
-3. Deploy:
+### 3. Deploy
 
 ```bash
 pnpm exec wrangler deploy
 ```
 
-## Telegram Webhook Setup
+More details: [Deployment Guide](./docs/DEPLOYMENT.md)
 
-After deploy, register Telegram webhook to the Worker URL.
+---
+
+## 🤖 Telegram setup
+
+### Register the production webhook
 
 ```bash
 curl -sS "https://api.telegram.org/bot<BOT_TOKEN>/setWebhook" \
@@ -231,176 +270,133 @@ curl -sS "https://api.telegram.org/bot<BOT_TOKEN>/setWebhook" \
   }'
 ```
 
-Verify:
+### Verify webhook status
 
 ```bash
 curl -sS "https://api.telegram.org/bot<BOT_TOKEN>/getWebhookInfo"
 ```
 
-## Bot Usage Guide
+### Destination channel setup
 
-### Supported commands
+1. Create or choose a destination Telegram channel.
+2. Add the bot as an admin with permission to post messages.
+3. Send `/newdest` to the bot.
+4. Copy or forward the generated `DEST <token>` line into the destination channel.
+5. The bot verifies the channel and links it to your account.
 
-- `/start`: Home menu
-- `/help`: Help text
-- `/commands`: Command list
-- `/newdest`: Start destination setup
-- `/changedest`: Change destination
-- `/follow`: Follow a channel (single or batch input)
-- `/import`: Bulk import flow
-- `/list`: List and manage followed channels
-- `/settings`: Global settings
-- `/cancel`: Cancel current step
-- `/done`: Exit batch add flow
+---
 
-### Destination setup flow
+## ⌨️ Bot commands
 
-1. Use `/newdest`.
-2. Bot sends `DEST <token>`.
-3. Post that line in destination channel where bot is admin.
-4. Bot verifies destination and links it to your account.
+| Command | Purpose |
+|---|---|
+| `/start` | Open the setup wizard or home menu |
+| `/help` | Show user help |
+| `/commands` | Show command list |
+| `/newdest` | Set a destination channel |
+| `/changedest` | Replace the current destination channel |
+| `/follow` | Follow one or more public channels |
+| `/import` | Bulk import channels |
+| `/list` | View and manage followed channels |
+| `/settings` | Open global settings |
+| `/cancel` | Cancel the current conversation step |
+| `/done` | Exit batch-add flow |
 
-### Follow channels
+More details: [Bot Usage Guide](./docs/BOT_USAGE.md)
 
-Accepted input forms:
-- `@channelname`
-- `https://t.me/channelname`
-- Forwarded message from channel
+---
 
-Only public channels are supported.
+## 🔐 Admin endpoints
 
-### Backfill
+Admin routes accept any of these auth methods:
 
-When following a channel, bot can send last `N` posts (default from global setting, per-channel override available).
-
-### Quiet hours
-
-Quiet hours are UTC-based.
-Input format in settings:
-- `start end` (example `1 8`)
-- `off` to disable
-
-## Filter Syntax
-
-Applies to both per-channel and global include/exclude editors.
-
-- Replace full list: `foo, bar, baz`
-- Patch existing list: `+foo, -bar`
-- Clear list: `clear`
-
-Notes:
-- Matching is case-insensitive substring.
-- Duplicate keywords are removed automatically.
-- Per-channel limit: 40 keywords per list.
-- Global limit: 80 keywords per list.
-
-Filter evaluation order:
-1. If any exclude keyword matches, post is blocked.
-2. If include list is empty, post passes.
-3. Otherwise at least one include keyword must match.
-
-## Admin Endpoints
-
-Auth methods:
 - `Authorization: Bearer <ADMIN_KEY>`
 - `X-Admin-Key: <ADMIN_KEY>`
 - `?key=<ADMIN_KEY>`
 
-If `ADMIN_KEY` is unset, `WEBHOOK_SECRET` is used.
-
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/admin/stats` | HTML dashboard |
-| `GET` | `/admin/stats.json` | Raw JSON stats |
+| `GET` | `/admin/stats` | HTML operations dashboard |
+| `GET` | `/admin/stats.json` | JSON stats payload |
 | `POST` | `/admin/run-scrape` | Trigger one scrape cycle |
-| `POST` | `/admin/ticker/start` | Ensure ticker alarm is running |
-| `POST` | `/admin/ticker/stop` | Stop ticker alarm |
-| `GET` | `/admin/ticker/status` | Ticker alarm status |
+| `POST` | `/admin/ticker/start` | Ensure the ticker alarm is running |
+| `POST` | `/admin/ticker/stop` | Stop the ticker alarm |
+| `GET` | `/admin/ticker/status` | Return ticker alarm state |
 
-### Example admin call
+Example:
 
 ```bash
 curl -sS "https://<your-worker-domain>/admin/stats.json" \
   -H "Authorization: Bearer <ADMIN_KEY>"
 ```
 
-## Data Model
+More details: [Operations Guide](./docs/OPERATIONS.md)
 
-Main tables:
-- `users`: Telegram users known to bot.
-- `pending_claims`: one-time destination claim tokens.
-- `destinations`: user destination channel and verification flag.
-- `sources`: tracked channel scrape state and health.
-- `user_sources`: subscriptions + per-channel settings.
-- `user_prefs`: global preferences and filters.
-- `scraped_posts`: cached scraped posts (for digest/backfill/queue rendering).
-- `queued_realtime`: deferred posts during quiet hours.
-- `user_state`: current conversational step.
-- `deliveries`: delivery de-duplication records.
-- `meta_kv`: schema version and misc metadata.
+---
 
-Source of truth for full schema: `schema.sql`.
+## 📁 Project structure
 
-## Operations and Maintenance
+```text
+.
+├── docs/                       # Expanded documentation
+├── migrations/                 # Incremental SQL migrations
+├── public/                     # Brand and example visual assets
+├── scripts/
+│   ├── poll.ts                 # Local Telegram getUpdates bridge
+│   └── schedule.ts             # Local scheduled-trigger simulator
+├── src/
+│   ├── admin/stats.ts          # Admin dashboard and metrics
+│   ├── db/repo.ts              # D1 repository helpers
+│   ├── db/schema.ts            # Runtime schema upgrades
+│   ├── scraper/tme.ts          # t.me/s scraper and media extraction
+│   ├── telegram/               # Telegram client, commands, handlers, UI
+│   ├── ticker/do.ts            # Durable Object scrape/delivery loop
+│   ├── config.ts               # Environment helpers
+│   ├── index.ts                # Worker entrypoint and routes
+│   └── types.ts                # Shared TypeScript types
+├── schema.sql                  # Base schema for new databases
+├── wipe.sql                    # Data wipe script, keeps schema
+├── wrangler.example.toml       # Cloudflare Worker template
+└── .dev.example.vars           # Local env template
+```
 
-### Runtime schema upgrades
+---
 
-`src/db/schema.ts` tracks upgrades via `meta_kv.schema_v` and applies migrations up to v7.
+## 📚 Documentation
 
-### Ticker behavior
+| Guide | What is inside |
+|---|---|
+| [Getting Started](./docs/GETTING_STARTED.md) | Fast setup checklist from clone to first delivery |
+| [Configuration](./docs/CONFIGURATION.md) | Environment variables, bindings, constants, secrets |
+| [Deployment](./docs/DEPLOYMENT.md) | Cloudflare deploy and Telegram webhook setup |
+| [Bot Usage](./docs/BOT_USAGE.md) | Commands, destination flow, follow/import flow, filters |
+| [Architecture](./docs/ARCHITECTURE.md) | Worker, Durable Object ticker, D1, scraper, delivery strategy |
+| [Database](./docs/DATABASE.md) | Tables, schema initialization, migrations, wipe flow |
+| [Operations](./docs/OPERATIONS.md) | Admin endpoints, monitoring, queues, maintenance |
+| [Troubleshooting](./docs/TROUBLESHOOTING.md) | Common problems and fixes |
+| [Development](./docs/DEVELOPMENT.md) | Local workflow, scripts, code map, safe changes |
 
-- Scrapes up to 30 due sources per tick.
-- Fetch concurrency is capped at 6.
-- Poll interval per source adapts.
-- Success with new posts: reset to 5s.
-- Success without new posts: back off up to 240s.
-- Errors: exponential backoff up to 240s.
+---
 
-### Delivery retention
+## ⚠️ Limitations
 
-`deliveries` records older than 14 days are periodically pruned by ticker.
+- Only **public** Telegram channels can be scraped.
+- Scraping relies on Telegram’s public `t.me/s` preview pages, so page structure changes can require scraper updates.
+- Filters use case-insensitive substring matching, not regular expressions.
+- Quiet hours are evaluated in **UTC**.
+- The project currently has no automated test suite.
+- Digest mode requires `STORE_SCRAPED_POSTS=true`.
 
-### Required setting for digest
+---
 
-Digest sending is skipped unless `STORE_SCRAPED_POSTS` is enabled.
+## 🔒 Security
 
-## Troubleshooting
+Never commit real Telegram tokens, webhook secrets, admin keys, or Cloudflare IDs. Use `.dev.vars` locally and `wrangler secret put` for production.
 
-### Webhook returns `403 forbidden`
+See [SECURITY.md](./SECURITY.md) for reporting and operational guidance.
 
-- Check `WEBHOOK_SECRET` in Worker env.
-- Check Telegram webhook `secret_token` matches exactly.
+---
 
-### Destination suddenly becomes unverified
+## 📄 License
 
-If Telegram returns destination access errors (bot removed, no rights, etc.), bot marks destination `verified=0`.
-
-Fix:
-1. Re-add bot as admin in destination channel.
-2. Use `/changedest` or `/newdest` and re-verify.
-
-### Digest not arriving
-
-- Ensure `STORE_SCRAPED_POSTS=true`.
-- Ensure channel mode is `digest` and not paused.
-- Ensure destination is verified.
-- Ensure digest interval has elapsed.
-
-### No new posts delivered
-
-- Check `/admin/stats.json` for source failures and queue buildup.
-- Trigger `/admin/run-scrape` manually.
-- Verify source channel is public and readable from `t.me/s/<username>`.
-
-## Known Limitations
-
-- Only public channels are supported for scraping.
-- Filter matching is substring-only.
-- Quiet hours use UTC.
-- No automated test suite is currently included.
-
-## Security Notes
-
-- Never commit real `BOT_TOKEN` or other secrets.
-- Keep `.dev.vars` local.
-- Prefer setting production secrets via `wrangler secret put`.
+ISC
