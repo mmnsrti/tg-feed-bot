@@ -9,8 +9,8 @@ crons = ["*/1 * * * *"] # only to make sure ticker is started (cron can't do 5s)
 
 [[d1_databases]]
 binding = "DB"
-database_name = "tg_feed_bot"
-database_id = "ac8e67e1-13df-4ee6-8dbc-5fa5cbcfb7ea"
+database_name = "database_name"
+database_id = "database_id"
 
 [[durable_objects.bindings]]
 name = "TICKER"
