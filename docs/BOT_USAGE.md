@@ -1,6 +1,6 @@
 # Bot Usage Guide
 
-TG Feed Bot is operated mainly through Telegram private chat menus and inline buttons.
+UniflyIO is operated mainly through Telegram private chat menus and inline buttons.
 
 ## Setup wizard
 

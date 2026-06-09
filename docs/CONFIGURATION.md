@@ -1,6 +1,6 @@
 # Configuration
 
-TG Feed Bot has three configuration layers:
+UniflyIO has three configuration layers:
 
 1. Cloudflare bindings in `wrangler.toml`
 2. Secrets and environment variables
@@ -17,7 +17,7 @@ cp wrangler.example.toml wrangler.toml
 Required sections:
 
 ```toml
-name = "tg-feed-bot"
+name = "uniflyio"
 main = "src/index.ts"
 compatibility_date = "2026-02-07"
 compatibility_flags = ["nodejs_compat"]
@@ -28,7 +28,7 @@ crons = ["*/1 * * * *"]
 
 [[d1_databases]]
 binding = "DB"
-database_name = "tg_feed_bot"
+database_name = "uniflyio"
 database_id = "<cloudflare_d1_database_id>"
 
 [[durable_objects.bindings]]

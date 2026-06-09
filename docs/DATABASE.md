@@ -1,19 +1,19 @@
 # Database Guide
 
-TG Feed Bot uses Cloudflare D1. The base schema is in `schema.sql`, and incremental runtime upgrades are handled by `src/db/schema.ts` using the `meta_kv` table.
+UniflyIO uses Cloudflare D1. The base schema is in `schema.sql`, and incremental runtime upgrades are handled by `src/db/schema.ts` using the `meta_kv` table.
 
 ## Bootstrap a new database
 
 Local:
 
 ```bash
-pnpm exec wrangler d1 execute tg_feed_bot --local --file=schema.sql
+pnpm exec wrangler d1 execute uniflyio --local --file=schema.sql
 ```
 
 Remote:
 
 ```bash
-pnpm exec wrangler d1 execute tg_feed_bot --remote --file=schema.sql
+pnpm exec wrangler d1 execute uniflyio --remote --file=schema.sql
 ```
 
 Important: runtime upgrades are not a full replacement for base schema initialization on an empty database.
@@ -66,13 +66,13 @@ The `migrations/` directory contains historical SQL files that mirror these sche
 To delete runtime data while keeping tables:
 
 ```bash
-pnpm exec wrangler d1 execute tg_feed_bot --local --file=wipe.sql
+pnpm exec wrangler d1 execute uniflyio --local --file=wipe.sql
 ```
 
 Remote wipe:
 
 ```bash
-pnpm exec wrangler d1 execute tg_feed_bot --remote --file=wipe.sql
+pnpm exec wrangler d1 execute uniflyio --remote --file=wipe.sql
 ```
 
 Use remote wipe carefully. It removes users, destinations, subscriptions, queues, deliveries, and cached posts.

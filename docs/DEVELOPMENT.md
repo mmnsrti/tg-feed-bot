@@ -28,13 +28,13 @@ STORE_SCRAPED_POSTS=true
 Initialize:
 
 ```bash
-pnpm exec wrangler d1 execute tg_feed_bot --local --file=schema.sql
+pnpm exec wrangler d1 execute uniflyio --local --file=schema.sql
 ```
 
 Wipe data:
 
 ```bash
-pnpm exec wrangler d1 execute tg_feed_bot --local --file=wipe.sql
+pnpm exec wrangler d1 execute uniflyio --local --file=wipe.sql
 ```
 
 ## Run locally

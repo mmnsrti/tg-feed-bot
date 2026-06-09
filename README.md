@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="./public/unifly_logo_option.png" alt="TG Feed Bot logo" width="120" />
+  <img src="./public/unifly_logo_option.png" alt="UniflyIO logo" width="120" />
 </p>
 
-<h1 align="center">TG Feed Bot</h1>
+<h1 align="center">UniflyIO</h1>
 
 <p align="center">
   Mirror public Telegram channel posts into your own destination channel with realtime delivery, digest summaries, filters, quiet hours, and a bilingual Telegram UI.
@@ -20,7 +20,7 @@
 
 ## ✨ What it does
 
-**TG Feed Bot** watches public Telegram channels via `t.me/s/<channel>`, detects new posts, and republishes them into a verified destination channel. Each user can manage their own destination, followed channels, delivery mode, filters, quiet hours, and display preferences from inside Telegram.
+**UniflyIO** watches public Telegram channels via `t.me/s/<channel>`, detects new posts, and republishes them into a verified destination channel. Each user can manage their own destination, followed channels, delivery mode, filters, quiet hours, and display preferences from inside Telegram.
 
 The bot is designed to run serverlessly on **Cloudflare Workers**, using **Durable Objects** for the high-frequency ticker and **D1** for persistent state.
 
@@ -133,13 +133,13 @@ cp wrangler.example.toml wrangler.toml
 Create a D1 database and copy its ID into `wrangler.toml`:
 
 ```bash
-pnpm exec wrangler d1 create tg_feed_bot
+pnpm exec wrangler d1 create uniflyio
 ```
 
 ### 4. Initialize the local database
 
 ```bash
-pnpm exec wrangler d1 execute tg_feed_bot --local --file=schema.sql
+pnpm exec wrangler d1 execute uniflyio --local --file=schema.sql
 ```
 
 ### 5. Start the Worker locally
@@ -217,10 +217,10 @@ Useful local database commands:
 
 ```bash
 # Initialize schema
-pnpm exec wrangler d1 execute tg_feed_bot --local --file=schema.sql
+pnpm exec wrangler d1 execute uniflyio --local --file=schema.sql
 
 # Wipe runtime data but keep tables
-pnpm exec wrangler d1 execute tg_feed_bot --local --file=wipe.sql
+pnpm exec wrangler d1 execute uniflyio --local --file=wipe.sql
 ```
 
 More details: [Development Guide](./docs/DEVELOPMENT.md)
@@ -232,7 +232,7 @@ More details: [Development Guide](./docs/DEVELOPMENT.md)
 ### 1. Initialize remote D1 schema
 
 ```bash
-pnpm exec wrangler d1 execute tg_feed_bot --remote --file=schema.sql
+pnpm exec wrangler d1 execute uniflyio --remote --file=schema.sql
 ```
 
 ### 2. Add Worker secrets

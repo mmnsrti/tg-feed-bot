@@ -11,7 +11,7 @@ cp wrangler.example.toml wrangler.toml
 Create a D1 database:
 
 ```bash
-pnpm exec wrangler d1 create tg_feed_bot
+pnpm exec wrangler d1 create uniflyio
 ```
 
 Copy the returned `database_id` into `wrangler.toml`.
@@ -21,7 +21,7 @@ Copy the returned `database_id` into `wrangler.toml`.
 For the first production deployment, initialize the base schema:
 
 ```bash
-pnpm exec wrangler d1 execute tg_feed_bot --remote --file=schema.sql
+pnpm exec wrangler d1 execute uniflyio --remote --file=schema.sql
 ```
 
 Runtime upgrades in `src/db/schema.ts` are incremental and helpful for deployed instances, but a new database should still be bootstrapped with `schema.sql`.
@@ -52,7 +52,7 @@ pnpm exec wrangler deploy
 After deploy, note your Worker URL, for example:
 
 ```text
-https://tg-feed-bot.<account>.workers.dev
+https://uniflyio.<account>.workers.dev
 ```
 
 ## 5. Register Telegram webhook

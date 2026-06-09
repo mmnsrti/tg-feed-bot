@@ -1,6 +1,6 @@
 # Architecture
 
-TG Feed Bot is a serverless Telegram mirroring service built on Cloudflare Workers, Durable Objects, and D1.
+UniflyIO is a serverless Telegram mirroring service built on Cloudflare Workers, Durable Objects, and D1.
 
 ## Component map
 

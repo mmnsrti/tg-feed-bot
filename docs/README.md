@@ -1,6 +1,6 @@
 # Documentation
 
-Welcome to the TG Feed Bot documentation. These guides are organized so you can go from setup to production operations without reading source code first.
+Welcome to the UniflyIO documentation. These guides are organized so you can go from setup to production operations without reading source code first.
 
 ## Recommended reading path
 

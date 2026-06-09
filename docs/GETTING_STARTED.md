@@ -1,6 +1,6 @@
 # Getting Started
 
-This guide gets TG Feed Bot from a fresh project checkout to a working local bot.
+This guide gets UniflyIO from a fresh project checkout to a working local bot.
 
 ## Prerequisites
 
@@ -46,7 +46,7 @@ cp wrangler.example.toml wrangler.toml
 Create a D1 database:
 
 ```bash
-pnpm exec wrangler d1 create tg_feed_bot
+pnpm exec wrangler d1 create uniflyio
 ```
 
 Copy the returned database ID into `wrangler.toml`.
@@ -56,7 +56,7 @@ Copy the returned database ID into `wrangler.toml`.
 The runtime upgrade function is incremental, but it is not a full empty-database bootstrap. Initialize the base schema first:
 
 ```bash
-pnpm exec wrangler d1 execute tg_feed_bot --local --file=schema.sql
+pnpm exec wrangler d1 execute uniflyio --local --file=schema.sql
 ```
 
 ## 5. Start the local Worker
